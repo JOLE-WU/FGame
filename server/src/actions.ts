@@ -3863,7 +3863,8 @@ async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
   try {
     const res = await fetch(`https://steamcommunity.com/profiles/${encodeURIComponent(steamId)}?xml=1`, {
       headers: { "User-Agent": "Mozilla/5.0" },
-      signal: AbortSignal.timeout(10_000),
+      // 4 秒足够；这个域名在部分网络下会一直挂到超时，不能让它拖住绑定。
+      signal: AbortSignal.timeout(4_000),
     });
     if (!res.ok) return null;
     const xml = await res.text();
@@ -5175,9 +5176,22 @@ export const Actions = {
       try {
         verdict = await checkSteamAssertion(p);
       } catch (e) {
-        const detail = `向 Steam 核验时网络失败：${e instanceof Error ? e.message : String(e)}`;
+        const reason = e instanceof Error ? e.message : String(e);
+        // steamcommunity.com 在部分网络（含国内）整站不可达。这种情况下
+        // 让用户「稍后重试」是没用的，必须直接给出可执行的替代路径。
+        const unreachable = /abort|timeout|timed out|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT|EAI_AGAIN|network/i.test(reason);
+        const detail = unreachable
+          ? "服务器连不上 steamcommunity.com（Steam 的登录/校验域名在当前网络下不可达）"
+          : `向 Steam 核验时网络失败：${reason}`;
         await saveBindDiag(ctx, uid, { at: Date.now(), ok: false, detail }, "steam");
-        return { ok: false, displayName: null, count: 0, note: `Steam 绑定失败：${detail}，请稍后重试。` };
+        return {
+          ok: false,
+          displayName: null,
+          count: 0,
+          note: unreachable
+            ? "Steam 官方登录当前不可用：服务器访问不了 steamcommunity.com。请改用「SteamID 绑定」——填 17 位 SteamID64 即可，不需要打开 Steam 网页。"
+            : `Steam 绑定失败：${detail}，请稍后重试。`,
+        };
       }
       if (!verdict.valid) {
         await saveBindDiag(
