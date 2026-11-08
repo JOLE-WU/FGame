@@ -330,15 +330,37 @@ body {
 
 /* bottom tab bar floats as a cream pill: 10px in from the sides and
    bottom, 22px radius, warm drop shadow; the active tab's indicator
-   bar keeps the coral gradient (bg-grad token) */
+   bar keeps the coral gradient (bg-grad token).
+
+   Two iOS-specific fixes (verified with a simulated 34px home-indicator
+   inset):
+   - The base bar uses a 97%-opaque token + backdrop blur. In WKWebView the
+     blur is unreliable and the list underneath shows THROUGH the pill, so
+     the cream bar gets a fully opaque face and no blur.
+   - The bar used to absorb the safe-area inset as bottom padding (34px vs
+     8px on top), pushing the icons 14px above the pill's centre. The inset
+     now lifts the whole pill instead, and the inner row centres its content
+     in a fixed 56px band. */
 :root[data-theme="light"] .tabbar {
   left: 10px;
   right: 10px;
-  bottom: 10px;
+  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   border: 1px solid var(--border);
   border-radius: 22px;
+  background: var(--chrome-bg-strong);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
   box-shadow: 0 14px 34px -14px rgba(150, 110, 80, 0.5);
   overflow: hidden;
+}
+:root[data-theme="light"] .tabbar > div {
+  height: 56px;
+  padding-top: 0;
+  padding-bottom: 0;
+  align-items: center;
+}
+:root[data-theme="light"] .tabbar > div > button {
+  justify-content: center;
 }
 
 /* chips that sit ON cover imagery keep their dark scrim + light text in
