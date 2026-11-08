@@ -128,6 +128,18 @@ function applyThemeAttr(t: UiTheme) {
   } catch {
     // no document (never in practice) — ignore
   }
+  // Tell the iOS shell what colour the page base is. The Capacitor web view
+  // is inset by the safe area, so the strips above (status bar) and below
+  // (home indicator) are painted by the native window — they used to be pure
+  // white on the cream page. The shell paints itself with this colour.
+  try {
+    const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    const bridge = (window as unknown as { webkit?: { messageHandlers?: { fgameTheme?: { postMessage: (v: string) => void } } } }).webkit
+      ?.messageHandlers?.fgameTheme;
+    if (bg && bridge) bridge.postMessage(bg);
+  } catch {
+    // web build (no native bridge) — nothing to paint
+  }
 }
 
 function ThemeToggleButton({ theme, onToggle }: { theme: UiTheme; onToggle: () => void }) {
@@ -462,6 +474,12 @@ const MiniRow = memo(function MiniRow({ deal, now, onOpen, badge }: { deal: Deal
           ) : null}
           {deal.regionLocked ? (
             <span className="flex-none rounded-full bg-[var(--warn-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--warn)]">锁区</span>
+          ) : null}
+          {/* Already owned: the same game is in this account's library
+              (bound platform or claimed earlier). Shown right on the row so
+              it is visible without opening the detail page. */}
+          {deal.inLibrary && !deal.claimed ? (
+            <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">已在库</span>
           ) : null}
           {badge ? (
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">{badge}</span>
@@ -4540,12 +4558,24 @@ function PrimeClaimFlow({
                   ) : null}
                   <button
                     type="button"
-                    aria-label={`《${current.title}》已领，下一款`}
+                    aria-label={current.inLibrary ? `《${current.title}》已在库中，下一款` : `《${current.title}》已领，下一款`}
                     disabled={claimMutation.isPending}
                     onClick={() => claimMutation.mutate(current)}
-                    className="cta-hard bg-grad px-4 py-3 text-sm font-bold text-[var(--accent-ink)] disabled:opacity-50"
+                    className={
+                      current.inLibrary
+                        ? "cta-inlib px-4 py-3 text-sm font-bold disabled:opacity-50"
+                        : "cta-hard bg-grad px-4 py-3 text-sm font-bold text-[var(--accent-ink)] disabled:opacity-50"
+                    }
                   >
-                    {claimMutation.isPending ? "记录中…" : index + 1 >= total ? "已领，完成" : "已领，下一款"}
+                    {claimMutation.isPending
+                      ? "记录中…"
+                      : current.inLibrary
+                        ? index + 1 >= total
+                          ? "已在库中，完成"
+                          : "已在库中，下一款"
+                        : index + 1 >= total
+                          ? "已领，完成"
+                          : "已领，下一款"}
                   </button>
                   <div className="flex gap-2.5">
                     <button
@@ -4619,11 +4649,13 @@ function PrimeClaimFlow({
               </div>
             </div>
             <p className="mt-3 text-center text-xs leading-relaxed text-[var(--dim2)]">
-              {current.channel === "epic"
-                ? "在亚马逊页点 Claim 后，回来点「检测入库」核对到账。"
-                : current.channel === "gog"
-                  ? "在亚马逊页拿到兑换码后，粘贴到上面点「自动兑换」。"
-                  : "在亚马逊页点 Claim 完成领取后，回到这里点「已领，下一款」。"}
+              {current.inLibrary
+                ? "这款已经在你的游戏库里了，点上面记一下就会跳到下一款。"
+                : current.channel === "epic"
+                  ? "在亚马逊页点 Claim 后，回来点「检测入库」核对到账。"
+                  : current.channel === "gog"
+                    ? "在亚马逊页拿到兑换码后，粘贴到上面点「自动兑换」。"
+                    : "在亚马逊页点 Claim 完成领取后，回到这里点「已领，下一款」。"}
             </p>
           </section>
         ) : null}
@@ -5139,6 +5171,13 @@ export function App() {
     const t = setInterval(() => setNow(Date.now()), 60000);
     return () => clearInterval(t);
   }, []);
+
+  // Keep the iOS shell's window colour in step with the page base (the
+  // strips outside the inset web view are painted natively), and make sure
+  // it learns the stored theme on first mount, not just on a later switch.
+  useEffect(() => {
+    applyThemeAttr(theme);
+  }, [theme]);
 
   useEffect(() => {
     const stored = loadSession();
