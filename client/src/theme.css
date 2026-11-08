@@ -351,7 +351,28 @@ body {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
   box-shadow: 0 14px 34px -14px rgba(150, 110, 80, 0.5);
-  overflow: hidden;
+  /* The pill floats 10px in from each side, so the page used to show through
+     those two gutters and the 10px strip beneath it — list artwork scrolled
+     visibly behind the bar. `::before` below paints a full-width pad in the
+     page colour to seal them; keeping overflow visible lets that pad escape
+     the pill's rounded box. */
+  overflow: visible;
+}
+
+/* Full-width opaque pad behind the floating pill. It reaches exactly to the
+   screen edges (undoing the pill's 10px insets and its 10px bottom offset,
+   safe-area included) and stops level with the pill's top edge, so content
+   disappears at the bar instead of running through the gaps. */
+:root[data-theme="light"] .tabbar::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  right: -10px;
+  bottom: calc(-10px - env(safe-area-inset-bottom, 0px));
+  height: calc(100% + 10px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg);
+  z-index: -1;
+  pointer-events: none;
 }
 :root[data-theme="light"] .tabbar > div {
   height: 56px;
