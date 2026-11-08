@@ -207,7 +207,10 @@ const server = http.createServer((req, res) => {
   })();
 });
 
-server.listen(PORT, () => {
+// Bind 0.0.0.0 explicitly: the published app is reached through a reverse
+// proxy that connects over IPv4, and some sandboxes resolve `listen(PORT)`'s
+// default IPv6 wildcard in a way the proxy cannot reach.
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`[fgame] FGame API listening on :${PORT} (${Object.keys(registry).length} actions)`);
 });
 

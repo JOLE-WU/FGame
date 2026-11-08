@@ -15,11 +15,35 @@ import type { ReactNode } from "react";
 /* RPC transport                                                       */
 /* ------------------------------------------------------------------ */
 
-/** Base URL of the FGame server. Empty = same origin (web dev / Space).
- *  In the iOS app set VITE_API_BASE to the deployed backend, e.g.
- *  https://fgame-api.example.com — see README. */
-const RAW_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+/**
+ * Deployed FGame API (published WorkBuddy app). The share link carries a
+ * `sharecode` access credential: a browser gets an HttpOnly cookie on the
+ * first page load, so same-origin web requests need nothing extra. The iOS
+ * WKWebView, however, runs on `capacitor://localhost`, is cross-origin and
+ * has no cookie — native builds must therefore use this absolute origin
+ * AND append the sharecode to every RPC request.
+ *
+ * These are public by design: this backend exists precisely so that anyone
+ * who receives the app can use it. Set VITE_API_BASE at build time to point
+ * a native build at a different backend.
+ */
+const PUBLIC_API_ORIGIN = "https://a81bed224b123cc64.app.workbuddy.host";
+const PUBLIC_API_SHARECODE = "73QDIHJLBR";
+
+const isNativeWebView =
+  typeof location !== "undefined" && !/^https?:$/.test(location.protocol);
+
+/** Empty = same origin (web / local dev). */
+const RAW_BASE =
+  (import.meta.env.VITE_API_BASE as string | undefined) ||
+  (isNativeWebView ? PUBLIC_API_ORIGIN : "");
 export const API_BASE = RAW_BASE.replace(/\/$/, "");
+
+/** Credential suffix for clients that have no access cookie. */
+const RPC_QUERY =
+  isNativeWebView && API_BASE === PUBLIC_API_ORIGIN
+    ? `?sharecode=${encodeURIComponent(PUBLIC_API_SHARECODE)}`
+    : "";
 
 export class ActionError extends Error {
   status: number;
@@ -53,7 +77,7 @@ export function createActionClient<M>(): ClientOf<M> {
   const call = async (action: string, args: unknown): Promise<unknown> => {
     let res: Response;
     try {
-      res = await fetch(`${API_BASE}/actions`, {
+      res = await fetch(`${API_BASE}/actions${RPC_QUERY}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, args: args ?? {} }),
