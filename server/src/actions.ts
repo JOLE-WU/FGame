@@ -2753,6 +2753,7 @@ const GOG_REDIRECT_URI = "https://embed.gog.com/on_login_success?origin=client";
 export const GOG_LOGIN_URL = `https://auth.gog.com/auth?client_id=${GOG_CLIENT_ID}&redirect_uri=${encodeURIComponent(GOG_REDIRECT_URI)}&response_type=code&layout=client2`;
 
 type PlatformKey = "epic" | "steam" | "gog";
+const PLATFORM_LABEL: Record<PlatformKey, string> = { epic: "Epic", steam: "Steam", gog: "GOG" };
 type AccountRow = typeof schema.accounts.$inferSelect;
 
 async function getAccountRow(ctx: Ctx, userId: number, platform: PlatformKey): Promise<AccountRow | null> {
@@ -3709,6 +3710,7 @@ async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: numb
   }
   const res = await fetch(
     `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${encodeURIComponent(row.steamApiKey)}&steamid=${encodeURIComponent(row.accountRef)}&include_appinfo=1&include_played_free_games=1&format=json`,
+    { signal: AbortSignal.timeout(15_000) },
   );
   if (!res.ok) throw new Error(`Steam Web API HTTP ${res.status}（Key 无效或资料未公开时会被拒绝）`);
   const data = (await res.json()) as Record<string, unknown>;
@@ -3723,6 +3725,7 @@ async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: numb
   try {
     const sres = await fetch(
       `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${encodeURIComponent(row.steamApiKey)}&steamids=${encodeURIComponent(row.accountRef)}`,
+      { signal: AbortSignal.timeout(10_000) },
     );
     if (sres.ok) {
       const sdata = (await sres.json()) as Record<string, unknown>;
@@ -3794,6 +3797,22 @@ async function syncPlatform(ctx: Ctx, userId: number, platform: PlatformKey): Pr
   return syncSteamLibrary(ctx, userId);
 }
 
+/** Cap one platform's sync so a single unreachable API (Steam's community
+ *  endpoints are often slow or blocked) cannot stall "sync all" forever. */
+async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label}：超过 ${Math.round(ms / 1000)} 秒无响应`)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 // ---------- Steam official OpenID login ("Sign in through Steam") ----------
 // Steam's official third-party login is OpenID 2.0: the client opens
 // https://steamcommunity.com/openid/login?openid.mode=checkid_setup with
@@ -3831,6 +3850,7 @@ async function checkSteamAssertion(params: Record<string, string>): Promise<{ va
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
+    signal: AbortSignal.timeout(15_000),
   });
   const raw = await res.text();
   const valid = /(^|\n)is_valid:true(\r?\n|$)/.test(raw);
@@ -3843,6 +3863,7 @@ async function fetchSteamPersonaName(steamId: string): Promise<string | null> {
   try {
     const res = await fetch(`https://steamcommunity.com/profiles/${encodeURIComponent(steamId)}?xml=1`, {
       headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) return null;
     const xml = await res.text();
@@ -5268,6 +5289,63 @@ export const Actions = {
         ctx.invalidateQueries();
         return { ok: false, count: 0, note };
       }
+    },
+  }),
+
+  syncAllPlatformLibraries: defineAction({
+    description: "Syncs the game libraries of ALL bound platforms (Epic, Steam, GOG) for the signed-in account in one tap. Runs the three platforms concurrently, caps each at 30s so one unreachable API cannot stall the rest, skips unbound platforms, records per-platform lastSyncNote, and returns a compact per-platform result.",
+    request: z.object({ ...authArg }),
+    response: z.object({
+      ok: z.boolean(),
+      bound: z.number(),
+      synced: z.number(),
+      results: z.array(
+        z.object({
+          platform: z.enum(["epic", "steam", "gog"]),
+          bound: z.boolean(),
+          ok: z.boolean(),
+          count: z.number(),
+          note: z.string(),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      const uid = await ownerId(ctx, args.authToken);
+      const platforms: PlatformKey[] = ["epic", "steam", "gog"];
+      const bindings = await Promise.all(
+        platforms.map(async (p) => {
+          const row = await getAccountRow(ctx, uid, p);
+          return { platform: p, bound: !!(row && (row.accountRef || row.accessToken)) };
+        }),
+      );
+      const results = await Promise.all(
+        bindings.map(async ({ platform, bound }) => {
+          if (!bound) {
+            return { platform, bound: false, ok: true, count: 0, note: "未绑定，已跳过" };
+          }
+          try {
+            const r = await withTimeout(syncPlatform(ctx, uid, platform), 30_000, `${PLATFORM_LABEL[platform]} 接口`);
+            await saveAccountRow(ctx, uid, platform, { lastSyncAt: Date.now(), lastSyncNote: r.note });
+            return { platform, bound: true, ok: true, count: r.count, note: r.note };
+          } catch (e) {
+            const note = `同步失败：${e instanceof Error ? e.message : String(e)}`;
+            try {
+              await saveAccountRow(ctx, uid, platform, { lastSyncAt: Date.now(), lastSyncNote: note });
+            } catch {
+              // best effort — the sync result is still reported
+            }
+            return { platform, bound: true, ok: false, count: 0, note };
+          }
+        }),
+      );
+      ctx.invalidateQueries();
+      const bound = results.filter((r) => r.bound).length;
+      return {
+        ok: results.every((r) => r.ok),
+        bound,
+        synced: results.filter((r) => r.bound && r.ok).length,
+        results,
+      };
     },
   }),
 

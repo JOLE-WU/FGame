@@ -39,6 +39,27 @@ const RAW_BASE =
   (isNativeWebView ? PUBLIC_API_ORIGIN : "");
 export const API_BASE = RAW_BASE.replace(/\/$/, "");
 
+/**
+ * Third-party login (Steam OpenID) needs an https realm / return_to. The iOS
+ * WKWebView runs on `capacitor://localhost`, which Steam rejects outright and
+ * renders as a blank page, so callbacks must always target the public origin
+ * instead of `window.location.origin`.
+ */
+export function oauthPublicBase(): string {
+  if (API_BASE) return API_BASE;
+  return typeof location !== "undefined" ? location.origin : PUBLIC_API_ORIGIN;
+}
+
+/** The published app's access credential, needed on the callback URL because
+ *  the reverse proxy rejects requests without it (no cookie on that hop). */
+export function oauthSharecode(): string {
+  if (typeof location !== "undefined") {
+    const fromUrl = new URLSearchParams(location.search).get("sharecode");
+    if (fromUrl) return fromUrl;
+  }
+  return PUBLIC_API_SHARECODE;
+}
+
 /** Credential suffix for clients that have no access cookie. */
 const RPC_QUERY =
   isNativeWebView && API_BASE === PUBLIC_API_ORIGIN

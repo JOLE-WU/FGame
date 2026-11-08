@@ -11,7 +11,7 @@ type FormEvent,
 type ReactNode,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SafeAreaTopScrim } from "./sdk-shim";
+import { SafeAreaTopScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
 import { isNativePlatform, openPlatformLoginNative, onPlatformAuthCode } from "./auth-bridge";
 
@@ -2155,13 +2155,20 @@ function CloudPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Dea
 // session) ties the return to the right in-app account, so the flow
 // still completes when the popup lives in a different browser context.
 function buildSteamOpenIdUrl(ticket: string): string {
-  const here = `${window.location.origin}${window.location.pathname}`;
-  const returnTo = `${here}?steam_ticket=${encodeURIComponent(ticket)}`;
+  // Steam OpenID only accepts an http(s) realm, and return_to must live under
+  // it. In the native app `window.location.origin` is `capacitor://localhost`,
+  // which Steam rejects with a BLANK page — the exact "steamcommunity.com
+  // white screen" seen on device. Always use the public https origin instead.
+  // The sharecode must survive the round trip: the callback page is a fresh
+  // browser context with no access cookie yet.
+  const base = oauthPublicBase();
+  const sc = oauthSharecode();
+  const returnTo = `${base}/?sharecode=${encodeURIComponent(sc)}&steam_ticket=${encodeURIComponent(ticket)}`;
   const q = new URLSearchParams({
     "openid.ns": "http://specs.openid.net/auth/2.0",
     "openid.mode": "checkid_setup",
     "openid.return_to": returnTo,
-    "openid.realm": window.location.origin,
+    "openid.realm": base,
     "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
     "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
   });
@@ -3612,6 +3619,22 @@ function MinePage({
     mutationFn: (platform: PlatformKey) => api.syncPlatformLibrary({ platform, authToken }),
     onSuccess: () => { invalidateAccountData(); },
   });
+  const [syncAllNote, setSyncAllNote] = useState<string | null>(null);
+  const syncAll = useMutation({
+    mutationFn: () => api.syncAllPlatformLibraries({ authToken }),
+    onSuccess: (r) => {
+      invalidateAccountData();
+      const failed = r.results.filter((x) => x.bound && !x.ok);
+      setSyncAllNote(
+        failed.length
+          ? `${failed.map((x) => PLATFORM_NAMES[x.platform]).join("、")} 未成功`
+          : r.bound > 0
+            ? `已同步 ${r.synced}/${r.bound} 个平台`
+            : "还没有绑定任何平台",
+      );
+    },
+    onError: (e) => setSyncAllNote(`同步失败：${e instanceof Error ? e.message : String(e)}`),
+  });
   const unbind = useMutation({
     mutationFn: (platform: PlatformKey) => api.unbindPlatform({ platform, authToken }),
     onSuccess: (_r, platform) => {
@@ -3930,6 +3953,23 @@ function MinePage({
 
       {/* platform bindings — compact small cards, one row of three */}
       <SectionHead no="02" title="平台账号" en="GAME ACCOUNTS" />
+      <div className="mb-2 flex items-center gap-2">
+        <button
+          type="button"
+          aria-label="同步所有已绑定平台的游戏库"
+          disabled={syncAll.isPending}
+          onClick={() => { setSyncAllNote(null); syncAll.mutate(); }}
+          className="flex-none rounded-[14px] border border-[var(--glass-edge-strong)] bg-[var(--surface2)] px-3 py-1.5 text-xs font-bold text-[var(--text)] backdrop-blur-md disabled:opacity-50"
+        >
+          {syncAll.isPending ? "同步中…" : "同步所有平台"}
+        </button>
+        {syncAllNote ? (
+          <>
+            <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--dim)]" title={syncAllNote}>{syncAllNote}</span>
+            <button type="button" aria-label="关闭同步结果" onClick={() => setSyncAllNote(null)} className="flex-none px-1 text-[13px] leading-none text-[var(--dim2)]">×</button>
+          </>
+        ) : null}
+      </div>
       <div className="grid grid-cols-3 gap-2">
         {(data?.platforms ?? []).map((status) => {
           const group = groups.find((g) => g.platform === status.platform);
