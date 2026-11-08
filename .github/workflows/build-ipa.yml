@@ -1,10 +1,16 @@
 name: Build FGame IPA
 
 # Builds the FGame iOS app on a macOS runner.
-#   • Every push / manual run produces an UNSIGNED .ipa (usable with
-#     AltStore / Sideloadly / TrollStore, or re-signed locally).
+#   • Every manual run produces an UNSIGNED .ipa whose FILE NAME, the app's
+#     own "我的" page and the iOS version fields all carry the version number.
 #   • If Apple signing secrets are configured, it ALSO produces a signed
 #     .ipa for direct install / TestFlight.
+#
+# VERSIONING (手动触发时填写，见下方 inputs):
+#   version      市场版本号，如 1.0.0 / 1.1.0，默认 1.0.0
+#   build_number 构建号，留空自动用本次 run number（每次出包必不重复）
+#   产物示例：FGame-v1.0.0-b7-unsigned.ipa，应用内显示 FGame v1.0.0 (7)
+#   同时在 FGame-version.txt / Actions 运行摘要里记录版本、commit、时间。
 #
 # Required for a SIGNED ipa (repo Settings → Secrets and variables → Actions):
 #   secrets.APPLE_CERTIFICATE_P12      base64 of the .p12 distribution cert
@@ -18,9 +24,20 @@ name: Build FGame IPA
 on:
   # Manual only. Previously every push started a macOS runner and burned
   # build minutes even when no .ipa was needed. Trigger explicitly from the
-  # Actions tab (or `gh workflow run build-ipa.yml`) when a new package is
-  # actually going out.
+  # Actions tab (or `gh workflow run build-ipa.yml -f version=1.0.1`) when a
+  # new package is actually going out.
   workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号，如 1.0.0 / 1.1.0（默认 1.0.0）'
+        required: false
+        default: '1.0.0'
+        type: string
+      build_number:
+        description: '构建号（整数），留空自动用本次运行编号'
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: build-ipa-${{ github.ref }}
@@ -39,6 +56,8 @@ jobs:
       DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID || '' }}
       PROVISIONING_PROFILE_UUID: ${{ secrets.PROVISIONING_PROFILE_UUID || '' }}
       EXPORT_METHOD: ${{ vars.EXPORT_METHOD || 'development' }}
+      FGAME_VERSION: ${{ inputs.version || '1.0.0' }}
+      FGAME_BUILD: ${{ inputs.build_number || github.run_number }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,6 +65,19 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+
+      - name: Validate version metadata
+        run: |
+          if ! printf '%s' "$FGAME_VERSION" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::版本号格式不合法：$FGAME_VERSION（应形如 1.0.0）"
+            exit 1
+          fi
+          if ! printf '%s' "$FGAME_BUILD" | grep -Eq '^[0-9]+$'; then
+            echo "::error::构建号必须是整数：$FGAME_BUILD"
+            exit 1
+          fi
+          echo "### 📦 FGame v${FGAME_VERSION} (build ${FGAME_BUILD})" >> "$GITHUB_STEP_SUMMARY"
+          echo "commit: \`$GITHUB_SHA\` · branch: \`$GITHUB_REF_NAME\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install JS dependencies
         run: npm install --no-audit --no-fund
@@ -60,7 +92,7 @@ jobs:
           npx cap add ios
           npx cap sync ios
 
-      - name: Apply FGame native overrides (icon, name, OAuth bridge, signing)
+      - name: Apply FGame native overrides (icon, name, OAuth bridge, version, signing)
         run: node scripts/prepare-ios.mjs
 
       - name: Install CocoaPods dependencies
@@ -84,10 +116,16 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
+          IPA="FGame-v${FGAME_VERSION}-b${FGAME_BUILD}-unsigned.ipa"
           mkdir -p build/Payload
           cp -R "build/FGame.xcarchive/Products/Applications/App.app" build/Payload/FGame.app
-          cd build && zip -qry ../FGame-unsigned.ipa Payload
+          cd build && zip -qry "../$IPA" Payload
           cd .. && rm -rf build/Payload
+          printf 'FGame v%s (build %s)\ncommit: %s\nbranch: %s\nbuilt: %s\n' \
+            "$FGAME_VERSION" "$FGAME_BUILD" "$GITHUB_SHA" "$GITHUB_REF_NAME" \
+            "$(date -u +%FT%TZ)" > FGame-version.txt
+          echo "打包完成：$IPA"
+          cat FGame-version.txt
 
       # ---------- SIGNED IPA (only when secrets present) ----------
       - name: Import signing certificate & provisioning profile
@@ -120,14 +158,14 @@ jobs:
             -archivePath "$PWD/build/FGame-signed.xcarchive" \
             -exportPath "$PWD/build/export" \
             -exportOptionsPlist build/ExportOptions.plist
-          cp build/export/App.ipa FGame-signed.ipa
+          cp build/export/App.ipa "FGame-v${FGAME_VERSION}-b${FGAME_BUILD}-signed.ipa"
 
       # ---------- artifacts ----------
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: FGame-IPA
+          name: FGame-IPA-v${{ env.FGAME_VERSION }}-b${{ env.FGAME_BUILD }}
           path: |
-            FGame-unsigned.ipa
-            FGame-signed.ipa
+            FGame-v*.ipa
+            FGame-version.txt
           if-no-files-found: error
