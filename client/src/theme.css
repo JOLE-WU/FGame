@@ -1,0 +1,351 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+@import "tailwindcss";
+@import "tailwindcss-safe-area";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  /* AURORA GLASS: the reference's serif slots become Outfit 600 */
+  --font-serif: "Outfit", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-mono: "IBM Plex Mono", "Noto Sans SC", monospace;
+  --font-num: "Outfit", "Noto Sans SC", sans-serif;
+  /* the one accent: cyan → violet gradient (bg-grad) */
+  --background-image-grad: linear-gradient(100deg, #6ee7f9, #b794f6);
+}
+
+:root {
+  /* AURORA GLASS dark is the default theme (no data-theme attribute, or
+     data-theme="dark"). The light theme below overrides ONLY the tokens
+     and aurora stacks; the cyan→violet gradient (--background-image-grad)
+     and the mint free/claimed hue family are shared by both themes. */
+  color-scheme: dark;
+  --bg: #070a18;
+  --paper: #0b1026;
+  --surface: rgba(255, 255, 255, 0.095);
+  --surface2: rgba(255, 255, 255, 0.06);
+  --surface3: #0b1026;
+  --text: #f2f5ff;
+  --dim: #c6d0ee;
+  --dim2: #8a96bf;
+  --border: rgba(255, 255, 255, 0.14);
+  --glass-edge: rgba(255, 255, 255, 0.16);
+  --glass-edge-strong: rgba(255, 255, 255, 0.28);
+  --chrome-bg: rgba(12, 17, 40, 0.86);
+  --chrome-bg-strong: rgba(12, 17, 40, 0.92);
+  --sticky-bg: rgba(11, 16, 38, 0.82);
+  --accent: #6ee7f9;
+  --accent-strong: #b794f6;
+  --accent-soft: rgba(125, 216, 247, 0.14);
+  --accent-ink: #08101f;
+  /* glow tint for accent shadows + translucent accent border colour;
+     the cream theme swaps both to the coral family */
+  --accent-glow: rgba(110, 231, 249, 0.45);
+  --accent-border: rgba(125, 216, 247, 0.5);
+  --warn: #ff9d8a;
+  --warn-bg: rgba(255, 120, 100, 0.14);
+  --free-bg: rgba(143, 233, 196, 0.14);
+  --free-ink: #8fe9c4;
+  /* brand-logo plate (cloud/AI covers): deep navy glass in the dark
+     theme so colourful marks read; cream theme overrides below */
+  --logo-plate: #141b3d;
+  --seg-track: rgba(255, 255, 255, 0.08);
+  --seg-active: rgba(255, 255, 255, 0.16);
+  --glass-hi: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --shadow-sm: 0 3px 10px -4px rgba(0, 0, 0, 0.4);
+  --aurora-bg:
+    radial-gradient(circle at 18% 12%, rgba(110, 231, 249, 0.2), transparent 45%),
+    radial-gradient(circle at 82% 22%, rgba(183, 148, 246, 0.24), transparent 48%),
+    radial-gradient(circle at 55% 95%, rgba(80, 120, 255, 0.2), transparent 55%),
+    #070a18;
+  --aurora-bg-soft:
+    radial-gradient(circle at 85% 8%, rgba(183, 148, 246, 0.22), transparent 46%),
+    radial-gradient(circle at 12% 88%, rgba(110, 231, 249, 0.16), transparent 48%),
+    #0b1026;
+  --radius: 20px;
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface2);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+}
+
+/* ---------- SOFT CREAM · light ----------
+   The light theme is the SOFT CREAM skin (Direction C): warm cream base,
+   solid milk-white cards with NO glass blur — depth comes from soft warm
+   shadows and 1px warm edges. Coral (#F08A6B→#F4A98D gradient fills) is
+   the only emphasis colour; mist green #7FA87C family means free/claimed.
+   Text-facing accent stops deepen slightly (same move the old aurora
+   light theme made) so small coral/green text stays readable on cream;
+   gradient FILLS keep the exact reference gradient. Dark theme above is
+   untouched AURORA GLASS. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #fbf4e9;
+  --paper: #fbf4e9;
+  --surface: #fffdf8;
+  --surface2: #f7ede1;
+  --surface3: #fffdf8;
+  --text: #4a3b33;
+  --dim: #7a655a;
+  --dim2: #a08a76;
+  --border: #efdfce;
+  --glass-edge: #efdfce;
+  --glass-edge-strong: #e3d1bc;
+  --chrome-bg: rgba(255, 253, 248, 0.97);
+  --chrome-bg-strong: #fffdf8;
+  --sticky-bg: rgba(251, 244, 233, 0.97);
+  --background-image-grad: linear-gradient(100deg, #f08a6b, #f4a98d);
+  --accent: #cf6238;
+  --accent-strong: #f4a98d;
+  --accent-soft: rgba(240, 138, 107, 0.12);
+  --accent-ink: #ffffff;
+  --accent-glow: rgba(240, 138, 107, 0.55);
+  --accent-border: rgba(240, 138, 107, 0.55);
+  --warn: #bf452c;
+  --warn-bg: rgba(191, 69, 44, 0.1);
+  --free-bg: rgba(127, 168, 124, 0.16);
+  --free-ink: #527a4e;
+  /* brand-logo plate in the cream theme: solid milk white */
+  --logo-plate: #fffdf8;
+  --seg-track: #e9dcc9;
+  --seg-active: #fffdf8;
+  --glass-hi: 0 8px 20px -12px rgba(150, 110, 80, 0.32);
+  --shadow: 0 12px 30px -14px rgba(150, 110, 80, 0.3);
+  --shadow-sm: 0 4px 12px -6px rgba(150, 110, 80, 0.32);
+  --aurora-bg:
+    radial-gradient(circle at 20% 10%, rgba(255, 248, 236, 0.9), transparent 60%),
+    radial-gradient(circle at 85% 90%, rgba(246, 220, 203, 0.55), transparent 55%),
+    #fbf4e9;
+  --aurora-bg-soft:
+    radial-gradient(circle at 85% 8%, rgba(246, 220, 203, 0.5), transparent 50%),
+    radial-gradient(circle at 12% 88%, rgba(255, 248, 236, 0.8), transparent 50%),
+    #fdf8ef;
+  /* rounded type: Baloo 2 for display/numbers, Nunito for body AND for
+     the mono-label slots (the cream reference retires the mono look) */
+  --font-serif: "Baloo 2", "Nunito", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-mono: "Nunito", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-num: "Baloo 2", "Nunito", "Noto Sans SC", sans-serif;
+  --radius: 22px;
+}
+
+html,
+body {
+  /* themed base everywhere — incl. overscroll / home-indicator zones */
+  background: var(--bg);
+  /* the page itself must never scroll or pan sideways: `clip` (unlike
+     `hidden`) creates no scroll container, so sticky headers and inner
+     horizontal scrollers keep working */
+  overflow-x: clip;
+  /* no elastic chaining to the host shell in any direction */
+  overscroll-behavior: none;
+}
+
+/* aurora glow field behind everything (three glows per the reference) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--aurora-bg);
+}
+
+/* fine grain over the glow field */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.045;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* The actual scroll container of a space is NOT body — it is the SDK's
+   fixed `[data-generated-space-root]` layer (position:fixed; overflow:auto),
+   and `.hatch-space-root` inside it. Lock the real containers: vertical
+   scrolling only, no horizontal pan, no bounce. The aurora background is
+   painted on this layer too, since it covers the viewport. */
+[data-generated-space-root] {
+  overflow-x: hidden !important;
+  overscroll-behavior: none;
+  touch-action: pan-y pinch-zoom;
+  background: var(--aurora-bg);
+}
+
+.hatch-space-root[data-hatch-space-root] {
+  overflow-x: clip;
+  max-width: 100%;
+  position: relative;
+  z-index: 1;
+  background: transparent;
+}
+
+body {
+  font-family: "Outfit", -apple-system, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* vertical panning only — a horizontal drag on page content does nothing;
+     gestures that start inside an inner horizontal scroller (screenshot
+     strips, chip rows) still scroll that scroller, because touch-action is
+     resolved up to the nearest scrolling ancestor */
+  touch-action: pan-y pinch-zoom;
+  overscroll-behavior: none;
+}
+
+/* Full-screen overlays (deal detail, Prime claim flow, library game detail)
+   are their own scroll containers — same rule: vertical only, no horizontal
+   pan, no bounce. Their background repaints the aurora field. */
+.v-scroll-only {
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  touch-action: pan-y pinch-zoom;
+  max-width: 100%;
+  background: var(--aurora-bg-soft);
+}
+
+/* gradient hairline under the masthead (was the broadsheet double rule) */
+.double-rule {
+  height: 1px;
+  border: 0;
+  background: linear-gradient(90deg, var(--accent), rgba(255, 255, 255, 0.14) 42%, transparent);
+}
+
+/* primary CTA: gradient glow instead of the old hard offset shadow */
+.cta-hard {
+  box-shadow: 0 10px 28px -10px rgba(125, 216, 247, 0.7);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+.cta-hard:active {
+  transform: translateY(1px);
+  box-shadow: 0 6px 16px -8px rgba(125, 216, 247, 0.7);
+}
+
+/* gradient-clipped text for the masthead brand and the brief's big numbers */
+.grad-text {
+  background: linear-gradient(100deg, #6ee7f9, #b794f6);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.grad-text-mint {
+  background: linear-gradient(120deg, #8fe9c4, #7dd8f7 55%, #c3a5fa);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* glass surface helper: translucent face + bright edge + inner highlight */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-hi);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+
+/* ---------- SOFT CREAM component treatments (light only) ---------- */
+
+/* body copy switches to the rounded Nunito stack */
+:root[data-theme="light"] body {
+  font-family: "Nunito", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+/* no glass in the cream world: every backdrop blur is switched off so
+   cards/chips/bars read as solid milk-white surfaces (the light tokens
+   already make those surfaces opaque) */
+:root[data-theme="light"] * {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+:root[data-theme="light"] .glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* masthead brand is solid cocoa in cream (the reference drops the
+   gradient headline); the brief's first big number keeps a coral
+   gradient, the second is solid cocoa like the reference's 119 */
+:root[data-theme="light"] h1.grad-text {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--text);
+}
+:root[data-theme="light"] .grad-text {
+  background: linear-gradient(100deg, #f08a6b, #f4a98d);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+:root[data-theme="light"] .grad-text-mint {
+  background: none;
+  -webkit-background-clip: border-box;
+  background-clip: border-box;
+  color: var(--text);
+}
+/* Baloo 2 has no light cut — big numbers render in its bold face */
+:root[data-theme="light"] .font-num {
+  font-weight: 700;
+}
+/* Baloo 2 figures run wider than Outfit's: shrink the brief's big
+   numbers a touch so the 全部羊毛 label keeps one line beside them */
+:root[data-theme="light"] section[aria-label="今日战报"] .font-num {
+  font-size: 50px;
+}
+
+/* primary CTA glow turns coral */
+:root[data-theme="light"] .cta-hard {
+  box-shadow: 0 10px 28px -10px rgba(240, 138, 107, 0.65);
+}
+:root[data-theme="light"] .cta-hard:active {
+  box-shadow: 0 6px 16px -8px rgba(240, 138, 107, 0.65);
+}
+
+/* chips on cover imagery (price tag, countdown) become the reference's
+   cocoa pill with cream text; the countdown's number uses the pale
+   coral stop so it stays readable on cocoa */
+:root[data-theme="light"] .img-chip {
+  background: rgba(74, 59, 51, 0.88);
+  color: #fffdf8;
+  border-color: transparent;
+}
+:root[data-theme="light"] .img-chip b {
+  color: #f4a98d;
+}
+
+/* bottom tab bar floats as a cream pill: 10px in from the sides and
+   bottom, 22px radius, warm drop shadow; the active tab's indicator
+   bar keeps the coral gradient (bg-grad token) */
+:root[data-theme="light"] .tabbar {
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: 0 14px 34px -14px rgba(150, 110, 80, 0.5);
+  overflow: hidden;
+}
+
+/* chips that sit ON cover imagery keep their dark scrim + light text in
+   both themes (they are read against the photo, not the page base) */
+.img-chip {
+  background: rgba(8, 14, 34, 0.82);
+  color: #f2f5ff;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}

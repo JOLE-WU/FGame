@@ -1,0 +1,46 @@
+{
+  "name": "fgame",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "FGame — 游戏 / 应用 / 云服务限免日报（iOS App + Web）",
+  "workspaces": [
+    "server"
+  ],
+  "scripts": {
+    "dev": "vite --config client/vite.config.ts",
+    "build": "vite build --config client/vite.config.ts",
+    "preview": "vite preview --config client/vite.config.ts",
+    "typecheck": "tsc --noEmit -p client/tsconfig.json",
+    "server": "npm --prefix server run start",
+    "server:dev": "npm --prefix server run dev",
+    "cap:add:ios": "cap add ios",
+    "cap:sync": "npm run build && cap sync ios",
+    "ios:prepare": "node scripts/prepare-ios.mjs"
+  },
+  "dependencies": {
+    "@capacitor/app": "^7.0.0",
+    "@capacitor/browser": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.0.0",
+    "@tanstack/react-query": "5.100.10",
+    "drizzle-orm": "0.45.2",
+    "react": "19.2.5",
+    "react-dom": "19.2.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0",
+    "@tailwindcss/vite": "^4.1.13",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "better-sqlite3": "^11.8.1",
+    "tailwindcss": "4.1.13",
+    "tailwindcss-safe-area": "1.3.0",
+    "typescript": "5.6.3",
+    "vite": "^6.0.7"
+  }
+}

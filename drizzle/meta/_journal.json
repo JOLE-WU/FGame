@@ -1,0 +1,90 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794012055607,
+      "tag": "0001_initial",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794012055607,
+      "tag": "0002_deals_marks_meta_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794015169217,
+      "tag": "0003_add_chinese_translations",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794039529330,
+      "tag": "0004_add_gallery_and_about_intro",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1794051517118,
+      "tag": "0005_accounts_library_app_prices",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794059705197,
+      "tag": "0006_user_accounts_and_per_user_ownership",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794062456223,
+      "tag": "0007_add_user_avatar",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1794066946916,
+      "tag": "0008_library_playtime_meta_and_store_slugs",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794068812830,
+      "tag": "0009_library_item_game_detail_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1794071738909,
+      "tag": "0010_add_library_acquired_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1794098186853,
+      "tag": "0011_epic_offers_and_library_device_platforms",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1794103461366,
+      "tag": "0012_add_deal_logo_url",
+      "breakpoints": true
+    }
+  ]
+}

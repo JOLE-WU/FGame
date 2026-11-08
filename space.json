@@ -1,0 +1,10 @@
+{
+  "entry": "client/dist/index.html",
+  "managedCronJobs": [
+    "space-bai-piao-kong-jian-daily-refresh"
+  ],
+  "name": "游戏应用限免推送",
+  "platformVersion": 28,
+  "runtime": "typescript",
+  "slug": "bai-piao-kong-jian"
+}

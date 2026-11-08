@@ -1,0 +1,30 @@
+node_modules/
+dist/
+client/dist/
+client/.tsbuildinfo*
+server/.tsbuildinfo*
+server/dist/
+*.tsbuildinfo
+
+# Local runtime data
+*.db
+*.db-shm
+*.db-wal
+blobs/
+build/
+*.xcarchive/
+*.ipa
+.env
+.env.local
+
+# Generated Capacitor iOS project (regenerate with `npx cap add ios`)
+ios/
+ios/App/App/public/
+ios/App/Pods/
+ios/App/App.xcworkspace/xcuserdata/
+ios/App/App.xcodeproj/xcuserdata/
+ios/App/App.xcodeproj/project.xcworkspace/xcuserdata/
+DerivedData/
+
+.DS_Store
+*.log

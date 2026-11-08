@@ -1,0 +1,125 @@
+name: Build FGame IPA
+
+# Builds the FGame iOS app on a macOS runner.
+#   • Every push / manual run produces an UNSIGNED .ipa (usable with
+#     AltStore / Sideloadly / TrollStore, or re-signed locally).
+#   • If Apple signing secrets are configured, it ALSO produces a signed
+#     .ipa for direct install / TestFlight.
+#
+# Required for a SIGNED ipa (repo Settings → Secrets and variables → Actions):
+#   secrets.APPLE_CERTIFICATE_P12      base64 of the .p12 distribution cert
+#   secrets.APPLE_CERTIFICATE_PASSWORD p12 password
+#   secrets.APPLE_PROVISIONING_PROFILE base64 of the .mobileprovision
+#   secrets.APPLE_TEAM_ID              Apple Developer Team ID
+#   secrets.PROVISIONING_PROFILE_UUID  profile UUID
+#   vars.FGAME_BUNDLE_ID               e.g. com.yourname.fgame (must match the profile)
+#   vars.FGAME_API_BASE                deployed backend URL, e.g. https://api.example.com
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  build-ipa:
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      FGAME_BUNDLE_ID: ${{ vars.FGAME_BUNDLE_ID || 'com.fgame.daily' }}
+      FGAME_API_BASE: ${{ vars.FGAME_API_BASE || '' }}
+      DEVELOPMENT_TEAM: ${{ secrets.APPLE_TEAM_ID || '' }}
+      PROVISIONING_PROFILE_UUID: ${{ secrets.PROVISIONING_PROFILE_UUID || '' }}
+      EXPORT_METHOD: ${{ vars.EXPORT_METHOD || 'development' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install JS dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build web bundle
+        run: npm run build
+        env:
+          VITE_API_BASE: ${{ env.FGAME_API_BASE }}
+
+      - name: Generate Capacitor iOS project
+        run: |
+          npm run build
+          npx cap add ios || true
+          npx cap sync ios
+
+      - name: Apply FGame native overrides (icon, name, OAuth bridge, signing)
+        run: node scripts/prepare-ios.mjs
+
+      - name: Install CocoaPods dependencies
+        run: |
+          cd ios/App
+          pod install --repo-update || pod install
+
+      # ---------- UNSIGNED IPA (always) ----------
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/FGame.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean archive
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R "build/FGame.xcarchive/Products/Applications/App.app" build/Payload/FGame.app
+          cd build && zip -qry ../FGame-unsigned.ipa Payload
+          cd .. && rm -rf build/Payload
+
+      # ---------- SIGNED IPA (only when secrets present) ----------
+      - name: Import signing certificate & provisioning profile
+        if: ${{ env.DEVELOPMENT_TEAM != '' }}
+        run: |
+          echo "${{ secrets.APPLE_CERTIFICATE_P12 }}" | base64 --decode > build/cert.p12
+          echo "${{ secrets.APPLE_PROVISIONING_PROFILE }}" | base64 --decode > build/profile.mobileprovision
+          KEYCHAIN=build/fgame.keychain-db
+          KEYPASS="$(openssl rand -base64 24)"
+          security create-keychain -p "$KEYPASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYPASS" "$KEYCHAIN"
+          security import build/cert.p12 -k "$KEYCHAIN" -P "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" -A -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYPASS" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp build/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+      - name: Archive + export signed IPA
+        if: ${{ env.DEVELOPMENT_TEAM != '' }}
+        run: |
+          xcodebuild \
+            -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/FGame-signed.xcarchive" \
+            clean archive
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/FGame-signed.xcarchive" \
+            -exportPath "$PWD/build/export" \
+            -exportOptionsPlist build/ExportOptions.plist
+          cp build/export/App.ipa FGame-signed.ipa
+
+      # ---------- artifacts ----------
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FGame-IPA
+          path: |
+            FGame-unsigned.ipa
+            FGame-signed.ipa
+          if-no-files-found: error

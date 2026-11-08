@@ -1,0 +1,118 @@
+# FGame · 限免日报（iOS App）
+
+把原来的「白嫖空间 / 游戏应用限免推送」Web Space 改造成可打包成 **iOS App（IPA）** 的自包含工程。App 名称 **FGame**，图标为深蓝底白色发光闪电。
+
+> 原始源码是 WorkBuddy「TS Space」：React 前端 + Bun server actions + Drizzle/SQLite，
+> 依赖闭源的 `@hatch/space-sdk`（私有 tarball，公网 CI 拿不到）。本项目用一层
+> 开源等价实现替换了它，因此可以在任意 Node 环境构建、在 GitHub Actions 上打包。
+
+---
+
+## 一、本次 4 项需求
+
+| # | 需求 | 实现 |
+|---|------|------|
+| 1 | **Epic / GOG 登录像小黑盒一样自动回连** | 原生 iOS 壳内嵌 WKWebView 打开官方登录页，注入脚本在成功页自动抓取授权码并回传，`epicLogin`/`gogLogin` 自动完成绑定 —— **无需复制粘贴**。见下方「自动回连原理」。Web 端保留原弹窗+剪贴板流程作兜底。 |
+| 2 | **iOS 限免按区服推荐：国 / 美 / 日 / 印度 / 港区** | 服务端对每个候选用 Apple 官方 iTunes Lookup 在 5 个 storefront 分别核验 `price === 0`，把真正免费的区服写入 `deals.regions`；APP 页新增区服切换，按区过滤、按区生成领取链接、卡片显示区服徽标。选择记在 localStorage。 |
+| 3 | **云服务卡片改长条** | `CloudCard` 从 16:9 大方块封面改为「左侧方形品牌板 + 右侧标题/平台/价格/时间」的横向长条。 |
+| 4 | **命名 FGame + 图标** | `appName`/`CFBundleDisplayName` = FGame；`assets/app-icon-1024.png` 为裁好的闪电图标（去水印/白边），已放进 iOS `AppIcon.appiconset`。 |
+
+### 自动回连原理（为什么必须做成原生 App）
+Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
+
+链路：
+```
+点「打开 Epic/GOG 官方登录页」
+  → fgame://oauth 深链 → AppDelegate 弹出原生 WKWebView（登录页）
+  → 注入的 detector 脚本在成功页抓到 code
+  → CustomEvent('fgameOAuthCode') 回到 Capacitor 主 WebView
+  → auth-bridge.ts → 复用 epicLogin/gogLogin 动作自动绑定
+```
+代码：`ios-overrides/App/App/AppDelegate.swift`、`client/src/auth-bridge.ts`、`client/src/App.tsx`（`PlatformLoginPanel`）。
+
+---
+
+## 二、目录结构
+
+```
+client/           React 前端（App.tsx = 全部 UI；sdk-shim = 开源 RPC/Query 兼容层）
+server/           Node HTTP 服务（better-sqlite3 + Drizzle），暴露 /actions RPC
+  src/actions.ts  原 Space 的业务逻辑（41 个 action，含限免同步/账号/验库）
+  src/index.ts    HTTP 服务：POST /actions、/blobs、/health、静态托管
+  src/db.ts       SQLite + 迁移
+  src/sdk-shim.ts defineAction / Ctx / z 的开源实现
+drizzle/          SQL 迁移（新增 0013_add_deal_regions.sql）
+ios-overrides/    Capacitor iOS 模板的覆盖文件（AppDelegate、Info.plist、图标）
+scripts/          prepare-ios.mjs：把覆盖应用到生成的 iOS 工程并配签名
+.github/workflows/build-ipa.yml   macOS 上编译 IPA 的 CI
+capacitor.config.ts              Capacitor 配置
+```
+
+---
+
+## 三、本地运行（Web）
+
+```bash
+npm install                 # 安装依赖（含 server 子 workspace）
+npm run build               # 构建前端到 client/dist
+npm run server              # 启动后端 :8787（自动执行迁移）
+# 另开一个终端做前端开发：
+npm run dev                 # Vite :5173
+```
+后端还可同时托管前端产物：`FGAME_WEB_DIR=./client/dist npm run server`，然后访问 `http://localhost:8787`。
+
+也可以用 Docker（需要 CI 或已构建好 `client/dist`）：
+```bash
+docker build -f server/Dockerfile -t fgame .
+docker run -p 8787:8787 -v fgame-data:/data -e FGAME_PUBLIC_ORIGIN=https://你的域名 fgame
+```
+
+---
+
+## 四、打包成 IPA（重要：请先看这里）
+
+**iOS App 只能在 macOS + Xcode 上编译和签名。** 当前构建环境是 Linux，无法直接产出可安装的 IPA；因此本项目用 **GitHub Actions 的 macOS runner** 来打包，产物为 workflow 的 artifact。
+
+### 两种 IPA
+| 类型 | 是否需要 Apple 开发者账号 | 用途 |
+|------|--------------------------|------|
+| **未签名 IPA**（每次 push / 手动触发都产出） | 否 | 用 AltStore / Sideloadly / TrollStore 侧载，或本地用免费 Apple ID 重签 |
+| **签名 IPA**（配置证书后产出） | 是（$99/年） | 直接安装到设备 / TestFlight |
+
+### 触发打包
+代码推到 GitHub 后，`.github/workflows/build-ipa.yml` 会在 `main`/`master` 的 push 时自动运行，也可在 Actions 页手动 `Run workflow`。产物 `FGame-IPA` 里包含 `FGame-unsigned.ipa`（若配置了签名证书还会多一个 `FGame-signed.ipa`）。
+
+### 配置签名（可选，用于签名 IPA）
+在仓库 `Settings → Secrets and variables → Actions` 添加：
+
+- **Secrets**：`APPLE_CERTIFICATE_P12`（.p12 的 base64）、`APPLE_CERTIFICATE_PASSWORD`、`APPLE_PROVISIONING_PROFILE`（.mobileprovision 的 base64）、`APPLE_TEAM_ID`、`PROVISIONING_PROFILE_UUID`
+- **Variables**：`FGAME_BUNDLE_ID`（需与描述文件匹配，默认 `com.fgame.daily`）、`FGAME_API_BASE`（**必填**：已部署的后端地址）、`EXPORT_METHOD`（development / ad-hoc / app-store）
+
+### 后端必须先部署
+iOS App 的前端是打进包里的，但 `/actions` 数据请求要访问一个**公网后端**。打包前把 `FGAME_API_BASE` 设为已部署的后端 URL（第三节的 Docker/Node 服务）。CORS 已全开，WKWebView 可跨域调用。
+
+### 本地（Mac）自己打
+```bash
+npm install
+VITE_API_BASE=https://你的后端 npm run build
+npx cap add ios
+npx cap sync ios
+node scripts/prepare-ios.mjs
+open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → Archive
+```
+
+---
+
+## 五、相对原 Space 的降级说明（诚实清单）
+独立部署后，以下几项依赖 WorkBuddy 托管能力的功能会**优雅降级**（不报错、不影响主流程）：
+- **AI 中英翻译 / 应用介绍润色**：SDK 的 `inference.complete` 无对应开源实现，独立部署时跳过，条目保留英文原文（已有中文翻译的行不受影响）。
+- **后台 agent 抓取 Epic 手游 discover 源**：`agent.spawnTask` 降级为 no-op；主抓取仍走直连，直连失败时保留上次数据。
+- **定时刷新**：原托管 cron 改为后端可选 `FGAME_AUTO_REFRESH=1` 自轮询。
+- **账号 / 验库 / 收藏 / 领取进度**：完全保留（都在 `actions.ts` + SQLite 里）。
+
+---
+
+## 六、安全
+- Epic / GOG 授权码与 token 只存在服务端 `accounts` 表，不返回客户端；App 内不出现任何平台密码输入框。
+- 授权码兑换走官方 OAuth endpoint，客户端只是把「成功页里的 code」交给服务端，逻辑与原版一致。
+- GitHub Token 等密钥仅通过环境变量 / CI Secrets 传入，**不要写进仓库文件**。

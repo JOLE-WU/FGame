@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="FGame" />
+    <meta name="application-name" content="FGame" />
+    <!-- Host chrome / under-webview areas sample theme-color: keep them on
+         the themed base colour instead of white. The in-app theme choice
+         (not the system scheme) drives these: dark is the default base,
+         the inline script below swaps them when a light choice is stored. -->
+    <meta name="theme-color" content="#070a18" />
+    <!-- Restore the saved light/dark choice BEFORE first paint (no flash):
+         signed-out → localStorage; signed-in → the account value is
+         applied by the app as soon as the session resolves. -->
+    <script>
+      try {
+        if (localStorage.getItem("baipiao-theme") === "light") {
+          document.documentElement.dataset.theme = "light";
+          var m = document.querySelector('meta[name="theme-color"]');
+          if (m) m.setAttribute("content", "#fbf4e9");
+        } else {
+          document.documentElement.dataset.theme = "dark";
+        }
+      } catch (e) {
+        document.documentElement.dataset.theme = "dark";
+      }
+    </script>
+    <link rel="icon" type="image/png" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-180.png" />
+    <title>FGame · 限免日报</title>
+    <script src="./src/main.tsx" type="module"></script>
+  </head>
+  <body>
+    <div
+      data-generated-space-root=""
+      data-generated-space-slug="bai-piao-kong-jian"
+    ></div>
+  </body>
+</html>
