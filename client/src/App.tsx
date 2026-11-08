@@ -15,6 +15,12 @@ import { SafeAreaTopScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
 import { isNativePlatform, openPlatformLoginNative, onPlatformAuthCode } from "./auth-bridge";
 
+// Injected by vite.config.ts from FGAME_VERSION / FGAME_BUILD (CI) or
+// package.json (local). Shown at the bottom of the "我的" page so any
+// sideloaded .ipa can always be identified by version.
+declare const __FGAME_VERSION__: string;
+declare const __FGAME_BUILD__: string;
+
 type Deal = ApiResponse<typeof api, "listDeals">["deals"][number];
 type AppPrice = ApiResponse<typeof api, "listAppPrices">["apps"][number];
 type AccountData = ApiResponse<typeof api, "getAccounts">;
@@ -4218,6 +4224,9 @@ function MinePage({
           onRemoveClaimed={(dealId) => unclaim.mutate(dealId)}
         />
       ) : null}
+      <p className="mt-8 pb-3 text-center font-mono text-[10px] tracking-[0.12em] text-[var(--dim2)]">
+        FGame v{__FGAME_VERSION__}{__FGAME_BUILD__ ? ` (${__FGAME_BUILD__})` : ""}
+      </p>
     </div>
   );
 }
