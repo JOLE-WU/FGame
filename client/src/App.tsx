@@ -2181,6 +2181,32 @@ function buildSteamOpenIdUrl(ticket: string): string {
   return `https://steamcommunity.com/openid/login?${q.toString()}`;
 }
 
+/**
+ * steamcommunity.com 在国内网络下经常整站不可达（TCP 直接超时）。
+ * 这种情况下打开登录页只会得到一个没有内容、也没有关闭按钮的白屏，
+ * 用户只能杀进程。用一次 4 秒上限的探测把这种情况提前识别出来，
+ * 改走不需要访问 Steam 网页的 SteamID 绑定。
+ *
+ * no-cors 只关心「请求有没有到达」：被墙时 fetch 会 reject（超时/DNS
+ * 失败），能通时返回一个 opaque response。
+ */
+async function probeSteamLoginReachable(): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    await fetch("https://steamcommunity.com/favicon.ico?fgame_probe=1", {
+      mode: "no-cors",
+      cache: "no-store",
+      signal: ctrl.signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type SteamReturn = { params: Record<string, string>; ticket: string | null };
 
 function steamReturnFromSearch(search: string): SteamReturn | null {
@@ -2426,7 +2452,11 @@ function PlatformLoginPanel({
   // blockers reject window.open calls made after an await).
   const [steamLoginUrl, setSteamLoginUrl] = useState<string | null>(null);
   const [steamUrlText, setSteamUrlText] = useState("");
-  const [showLegacyForm, setShowLegacyForm] = useState(false);
+  // 默认展开手动绑定：国内网络下 steamcommunity.com 常整站不可达，
+  // OpenID 登录页打不开（白屏），SteamID 绑定才是真正能走通的路径。
+  const [showLegacyForm, setShowLegacyForm] = useState(true);
+  // steamcommunity.com 可达性探测结果（只在点登录时测一次，4 秒上限）。
+  const [steamNet, setSteamNet] = useState<"unknown" | "checking" | "ok" | "down">("unknown");
   const steamStart = useMutation({
     mutationFn: () => api.steamOpenIdStart({ authToken }),
     onSuccess: (r) => {
@@ -2577,7 +2607,7 @@ function PlatformLoginPanel({
     else gogLogin.mutate(code.trim());
   };
 
-  const startSteamLogin = () => {
+  const startSteamLogin = async () => {
     setClipNote(null);
     setPopupBlocked(false);
     setPopupClosed(false);
@@ -2587,6 +2617,25 @@ function PlatformLoginPanel({
       // (same URL) is offered instead.
       if (!steamStart.isPending) steamStart.mutate();
       setClipNote("登录链接正在准备，稍候再点一次按钮。");
+      return;
+    }
+    // steamcommunity.com 在国内网络下经常整站不可达：直接打开登录页只会
+    // 得到一个没有内容、也退不回来的白屏。先探测（4 秒上限），不通就
+    // 不开窗，直接引导到不需要访问 Steam 网页的 SteamID 绑定。
+    if (steamNet !== "ok") {
+      setSteamNet("checking");
+      const reachable = await probeSteamLoginReachable();
+      setSteamNet(reachable ? "ok" : "down");
+      if (!reachable) {
+        setShowLegacyForm(true);
+        setClipNote(
+          "当前网络打不开 Steam 官方登录页（steamcommunity.com），打开只会是白屏。请用下面的 SteamID 绑定：不用访问 Steam 网页，填 17 位 ID 就能绑定。",
+        );
+        return;
+      }
+      // window.open 在 await 之后会被浏览器当成非用户手势而拦截，
+      // 所以探测通过后请用户再点一次（此时走同步分支）。
+      setClipNote("网络正常，再点一次「打开 Steam 官方登录页」。");
       return;
     }
     let w: Window | null = null;
@@ -2632,8 +2681,10 @@ function PlatformLoginPanel({
       ) : status.lastBindError ? (
         <p className="text-xs font-medium leading-[1.7] text-[var(--warn)]">服务端记录 · {status.lastBindError}</p>
       ) : null;
+    // bind-status: .bind-clean 会隐藏所有 <p>，但绑定结果 / 失败原因是功能
+    // 反馈而不是引导文案，必须可见（尤其网络不通时，否则用户只看到「没反应」）。
     const steamNote = note ? (
-      <p className={`text-xs font-medium leading-[1.7] ${noteBad ? "text-[var(--warn)]" : "text-[var(--dim)]"}`}>{note}</p>
+      <p className={`bind-status text-xs font-medium leading-[1.7] ${noteBad ? "text-[var(--warn)]" : "text-[var(--dim)]"}`}>{note}</p>
     ) : null;
 
     if (status.bound) {
@@ -2694,18 +2745,27 @@ function PlatformLoginPanel({
       <div className="grid gap-3">
         {phase === "start" ? (
           <>
-            <p className="text-xs leading-[1.7] text-[var(--dim)]">
-              点按钮弹出 Steam 官方登录页，在 Steam 官网输账号密码（密码只输在官网）。登录后 Steam 会自动跳回本页完成绑定，不用复制粘贴任何东西。
-            </p>
+            <div className="text-xs leading-[1.7] text-[var(--dim)]">
+              Steam 官方登录页在部分网络下打不开（表现为白屏）。点按钮会先探测 4 秒：通就打开官方登录页，不通会直接改用下面的 SteamID 绑定。
+            </div>
             <button
               type="button"
               aria-label="打开 Steam 官方登录页"
-              disabled={steamStart.isPending && !steamLoginUrl}
+              disabled={(steamStart.isPending && !steamLoginUrl) || steamNet === "checking"}
               onClick={startSteamLogin}
               className="rounded-[14px] bg-grad px-4 py-2.5 text-sm font-bold text-[var(--accent-ink)] disabled:opacity-50"
             >
-              {steamLoginUrl ? "打开 Steam 官方登录页" : "正在准备登录链接…"}
+              {steamNet === "checking"
+                ? "正在检查 Steam 网络…"
+                : steamLoginUrl
+                  ? "打开 Steam 官方登录页"
+                  : "正在准备登录链接…"}
             </button>
+            {steamNet === "down" ? (
+              <p className="bind-status text-xs font-medium leading-[1.7] text-[var(--warn)]">
+                已确认：当前网络访问不了 steamcommunity.com，Steam 官方登录在这台设备上用不了。请直接用下面的 SteamID 绑定——不需要打开任何 Steam 网页。
+              </p>
+            ) : null}
           </>
         ) : (
           <>
@@ -2752,7 +2812,7 @@ function PlatformLoginPanel({
             ) : null}
           </div>
         ) : null}
-        {clipNote ? <p className="text-xs font-medium leading-[1.7] text-[var(--dim)]">{clipNote}</p> : null}
+        {clipNote ? <p className="bind-status text-xs font-medium leading-[1.7] text-[var(--dim)]">{clipNote}</p> : null}
         {showPaste ? (
           <div className="grid gap-2 border-t border-[var(--border)] pt-3">
             <div>
@@ -2783,15 +2843,21 @@ function PlatformLoginPanel({
         {steamNote}
         {steamDiag}
         <div className="border-t border-[var(--border)] pt-3">
-          <button
-            type="button"
-            aria-label="旧方式手动绑定 Steam"
-            aria-expanded={showLegacyForm}
-            onClick={() => setShowLegacyForm((v) => !v)}
-            className="text-xs font-medium text-[var(--dim2)] underline underline-offset-4"
-          >
-            旧方式：手动填 SteamID + Key 绑定
-          </button>
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-xs font-bold text-[var(--text)]">SteamID 绑定（不需要打开 Steam 网页）</div>
+            <button
+              type="button"
+              aria-label="展开或收起 SteamID 绑定表单"
+              aria-expanded={showLegacyForm}
+              onClick={() => setShowLegacyForm((v) => !v)}
+              className="flex-none text-xs font-medium text-[var(--dim2)] underline underline-offset-4"
+            >
+              {showLegacyForm ? "收起" : "展开"}
+            </button>
+          </div>
+          <div className="mt-1 text-xs leading-[1.7] text-[var(--dim2)]">
+            Steam App →「个人资料」→「分享个人资料」→ 复制链接，粘到下面即可；链接里的 17 位数字就是 SteamID64，也可以直接填数字。
+          </div>
           {showLegacyForm ? (
             <div className="mt-3 grid gap-3">
               <div>
@@ -2804,7 +2870,9 @@ function PlatformLoginPanel({
                 </label>
                 <input id="steam-key-legacy" aria-label="Steam Web API Key" type="password" autoComplete="off" className={`${inputCls} mt-1`} value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="在 steamcommunity.com/dev/apikey 申请，只存服务端" />
               </div>
-              <p className="text-xs leading-[1.7] text-[var(--dim2)]">同步走 Steam 官方 Web API，需要资料里「游戏详情」设为公开；没有 Key 时只能先绑定 SteamID。</p>
+              <div className="text-xs leading-[1.7] text-[var(--dim2)]">
+                API Key 只在同步游戏库时才需要，可以先留空——绑定本身就完成了。申请页 steamcommunity.com/dev/apikey 在国内网络可能打不开；有 Key 时还要求资料里「游戏详情」设为公开。
+              </div>
               <button
                 type="button"
                 aria-label="保存 Steam 绑定并同步游戏库"
@@ -2812,7 +2880,7 @@ function PlatformLoginPanel({
                 onClick={() => steamBind.mutate()}
                 className="rounded-[14px] border border-[var(--glass-edge-strong)] bg-[var(--surface2)] backdrop-blur-md px-4 py-2.5 text-sm font-bold text-[var(--text)] disabled:opacity-50"
               >
-                {steamBind.isPending ? "同步中…" : "保存并同步游戏库"}
+                {steamBind.isPending ? "保存中…" : apiKey.trim() ? "保存并同步游戏库" : "保存绑定"}
               </button>
             </div>
           ) : null}
