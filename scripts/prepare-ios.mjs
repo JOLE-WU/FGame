@@ -20,6 +20,19 @@ const PBXPROJ = join(IOS, "App.xcodeproj", "project.pbxproj");
 const BUNDLE_ID = process.env.FGAME_BUNDLE_ID || "com.fgame.daily";
 const TEAM = process.env.DEVELOPMENT_TEAM || "";
 const MARKETING = process.env.FGAME_VERSION || "1.0.0";
+const BUILD = process.env.FGAME_BUILD || "1";
+
+// Version metadata comes from the CI workflow (workflow_dispatch inputs).
+// Bake it into Info.plist as literal strings so the version is always
+// visible in sideloaders / iOS Settings even if Xcode build settings differ.
+if (!/^\d+(\.\d+){0,2}$/.test(MARKETING)) {
+  console.error(`✖ 非法版本号: ${MARKETING}（应形如 1.0.0）`);
+  process.exit(1);
+}
+if (!/^\d+$/.test(BUILD)) {
+  console.error(`✖ 非法构建号: ${BUILD}（应为整数）`);
+  process.exit(1);
+}
 
 if (!existsSync(PBXPROJ)) {
   console.error("✖ ios/App/App.xcodeproj not found. Run `npx cap add ios` first.");
@@ -30,10 +43,23 @@ if (!existsSync(PBXPROJ)) {
 cpSync(OVERRIDES, IOS, { recursive: true, force: true });
 console.log("✓ copied ios-overrides/ -> ios/App/");
 
+// 1b. Bake the version into Info.plist (CFBundleShortVersionString /
+//     CFBundleVersion). The override file uses $(MARKETING_VERSION) and
+//     $(CURRENT_PROJECT_VERSION) placeholders; replacing them here makes
+//     the version independent of Xcode build settings.
+const PLIST = join(IOS, "App", "Info.plist");
+let plist = readFileSync(PLIST, "utf8");
+plist = plist
+  .replace(/\$\(MARKETING_VERSION\)/g, MARKETING)
+  .replace(/\$\(CURRENT_PROJECT_VERSION\)/g, BUILD);
+writeFileSync(PLIST, plist);
+console.log(`✓ Info.plist version = ${MARKETING} (${BUILD})`);
+
 // 2. Patch project.pbxproj: bundle id, version, signing style / team.
 let pbx = readFileSync(PBXPROJ, "utf8");
 pbx = pbx.replace(/PRODUCT_BUNDLE_IDENTIFIER = [^;]+;/g, `PRODUCT_BUNDLE_IDENTIFIER = ${BUNDLE_ID};`);
 pbx = pbx.replace(/MARKETING_VERSION = [^;]+;/g, `MARKETING_VERSION = ${MARKETING};`);
+pbx = pbx.replace(/CURRENT_PROJECT_VERSION = [^;]+;/g, `CURRENT_PROJECT_VERSION = ${BUILD};`);
 if (TEAM) {
   pbx = pbx.replace(/CODE_SIGN_STYLE = [^;]+;/g, "CODE_SIGN_STYLE = Manual;");
   // Ensure DEVELOPMENT_TEAM exists on each build config that has a bundle id.
@@ -69,4 +95,4 @@ mkdirSync(join(ROOT, "build"), { recursive: true });
 writeFileSync(join(ROOT, "build", "ExportOptions.plist"), exportOptions);
 console.log("✓ wrote build/ExportOptions.plist");
 
-console.log("\nFGame iOS project ready: ios/App/App.xcworkspace");
+console.log(`\nFGame v${MARKETING} (build ${BUILD}) — iOS project ready: ios/App/App.xcworkspace`);
