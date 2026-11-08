@@ -236,6 +236,20 @@ body {
   box-shadow: 0 6px 16px -8px rgba(125, 216, 247, 0.7);
 }
 
+/* Primary CTA variant for a game already sitting in the library: mint fill
+   instead of the coral gradient, so 「已在库中」 reads as a state, not as
+   another claim to perform. */
+.cta-inlib {
+  border-radius: 14px;
+  background: var(--free-bg);
+  color: var(--free-ink);
+  border: 1px solid color-mix(in srgb, var(--free-ink) 34%, transparent);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.cta-inlib:active {
+  transform: translateY(1px);
+}
+
 /* gradient-clipped text for the masthead brand and the brief's big numbers */
 .grad-text {
   background: linear-gradient(100deg, #6ee7f9, #b794f6);
@@ -344,15 +358,18 @@ body {
 :root[data-theme="light"] .tabbar {
   left: 10px;
   right: 10px;
-  bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  /* 6px float gap instead of 10: the bar used to read ~14px taller than the
+     system tab bars (WeChat sits 49pt above the home indicator, ours was
+     ~68pt), which is what made it feel oversized on device. */
+  bottom: calc(6px + env(safe-area-inset-bottom, 0px));
   border: 1px solid var(--border);
-  border-radius: 22px;
+  border-radius: 20px;
   background: var(--chrome-bg-strong);
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  box-shadow: 0 14px 34px -14px rgba(150, 110, 80, 0.5);
-  /* The pill floats 10px in from each side, so the page used to show through
-     those two gutters and the 10px strip beneath it — list artwork scrolled
+  box-shadow: 0 12px 28px -14px rgba(150, 110, 80, 0.5);
+  /* The pill floats in from each side, so the page used to show through
+     those two gutters and the strip beneath it — list artwork scrolled
      visibly behind the bar. `::before` below paints a full-width pad in the
      page colour to seal them; keeping overflow visible lets that pad escape
      the pill's rounded box. */
@@ -360,22 +377,22 @@ body {
 }
 
 /* Full-width opaque pad behind the floating pill. It reaches exactly to the
-   screen edges (undoing the pill's 10px insets and its 10px bottom offset,
-   safe-area included) and stops level with the pill's top edge, so content
-   disappears at the bar instead of running through the gaps. */
+   screen edges (undoing the pill's insets and its bottom offset, safe-area
+   included) and stops level with the pill's top edge, so content disappears
+   at the bar instead of running through the gaps. */
 :root[data-theme="light"] .tabbar::before {
   content: "";
   position: absolute;
   left: -10px;
   right: -10px;
-  bottom: calc(-10px - env(safe-area-inset-bottom, 0px));
-  height: calc(100% + 10px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(-6px - env(safe-area-inset-bottom, 0px));
+  height: calc(100% + 6px + env(safe-area-inset-bottom, 0px));
   background: var(--bg);
   z-index: -1;
   pointer-events: none;
 }
 :root[data-theme="light"] .tabbar > div {
-  height: 56px;
+  height: 46px;
   padding-top: 0;
   padding-bottom: 0;
   align-items: center;
