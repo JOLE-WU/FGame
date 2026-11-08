@@ -20,9 +20,12 @@ on:
   push:
     branches: [main, master]
 
+permissions:
+  contents: read
+
 jobs:
   build-ipa:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       FGAME_BUNDLE_ID: ${{ vars.FGAME_BUNDLE_ID || 'com.fgame.daily' }}
@@ -48,8 +51,7 @@ jobs:
 
       - name: Generate Capacitor iOS project
         run: |
-          npm run build
-          npx cap add ios || true
+          npx cap add ios
           npx cap sync ios
 
       - name: Apply FGame native overrides (icon, name, OAuth bridge, signing)
@@ -83,7 +85,7 @@ jobs:
 
       # ---------- SIGNED IPA (only when secrets present) ----------
       - name: Import signing certificate & provisioning profile
-        if: ${{ env.DEVELOPMENT_TEAM != '' }}
+        if: env.DEVELOPMENT_TEAM != ''
         run: |
           echo "${{ secrets.APPLE_CERTIFICATE_P12 }}" | base64 --decode > build/cert.p12
           echo "${{ secrets.APPLE_PROVISIONING_PROFILE }}" | base64 --decode > build/profile.mobileprovision
@@ -99,7 +101,7 @@ jobs:
           cp build/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
       - name: Archive + export signed IPA
-        if: ${{ env.DEVELOPMENT_TEAM != '' }}
+        if: env.DEVELOPMENT_TEAM != ''
         run: |
           xcodebuild \
             -workspace ios/App/App.xcworkspace \
