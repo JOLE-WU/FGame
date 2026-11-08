@@ -16,9 +16,15 @@ name: Build FGame IPA
 #   vars.FGAME_API_BASE                deployed backend URL, e.g. https://api.example.com
 
 on:
+  # Manual only. Previously every push started a macOS runner and burned
+  # build minutes even when no .ipa was needed. Trigger explicitly from the
+  # Actions tab (or `gh workflow run build-ipa.yml`) when a new package is
+  # actually going out.
   workflow_dispatch:
-  push:
-    branches: [main, master]
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

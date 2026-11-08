@@ -2611,7 +2611,13 @@ function imagePixelSize(buf: Uint8Array): number | null {
 
 async function probeLogoCandidate(url: string): Promise<{ url: string; size: number } | null> {
   try {
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0" }, redirect: "follow" });
+    const res = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      redirect: "follow",
+      // These probes run serially (up to ~96 candidates) inside refreshDeals.
+      // One unresponsive brand domain must not stall the entire refresh.
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return null;
     const ct = (res.headers.get("content-type") ?? "").toLowerCase();
     if (!ct.startsWith("image/")) return null;
@@ -2663,7 +2669,11 @@ async function backfillBrandLogos(ctx: Ctx): Promise<number> {
       r.tags.split(",").some((t) => t === "cloud" || t === "ai"),
   );
   let done = 0;
+  const startedAt = Date.now();
   for (const row of targets.slice(0, 12)) {
+    // Overall budget: logos are cosmetic enrichment and must never hold up
+    // a refresh. Unfinished entries are picked up on the next cycle.
+    if (Date.now() - startedAt > 45_000) break;
     const triedKey = `logo_tried:${row.externalId}`;
     const tried = await db.select().from(schema.meta).where(eq(schema.meta.key, triedKey)).limit(1);
     const triedAt = tried[0] ? Number(tried[0].value) : 0;

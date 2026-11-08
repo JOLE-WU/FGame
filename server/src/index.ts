@@ -158,7 +158,12 @@ async function route(req: Request): Promise<Response> {
     return handleAction(body);
   }
   if (req.method === "GET" && url.pathname === "/health") {
-    return json({ ok: true, app: "FGame", actions: Object.keys(registry).length });
+    return json({
+      ok: true,
+      app: "FGame",
+      actions: Object.keys(registry).length,
+      autoRefresh: process.env.FGAME_AUTO_REFRESH === "1",
+    });
   }
   if (req.method === "GET" && url.pathname.startsWith("/blobs/")) {
     const p = blobPath(decodeURIComponent(url.pathname.slice("/blobs/".length)));
@@ -218,16 +223,37 @@ server.listen(PORT, "0.0.0.0", () => {
    Enable with FGAME_AUTO_REFRESH=1 and FGAME_REFRESH_MS (default 6h). */
 if (process.env.FGAME_AUTO_REFRESH === "1") {
   const ms = Number(process.env.FGAME_REFRESH_MS ?? 6 * 60 * 60 * 1000);
+  // Hard cap per run. refreshDeals upserts the main GamerPower / Epic feeds
+  // early, so a run that reaches the cap has already refreshed everything a
+  // user sees; the remaining best-effort enrichment is left to next cycle.
+  const capMs = Number(process.env.FGAME_REFRESH_CAP_MS ?? 120_000);
+  let running = false;
   const refresh = async () => {
+    if (running) return; // never stack refreshes on top of each other
     const entry = registry["refreshDeals"];
     if (!entry) return;
+    running = true;
+    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let capped = false;
     try {
-      await entry.handler(ctx, {});
-      console.log("[fgame] daily refresh done");
-    } catch (e) {
-      console.error("[fgame] daily refresh failed", e);
+      await Promise.race([
+        Promise.resolve()
+          .then(() => entry.handler(ctx, {}))
+          .then(() => console.log(`[fgame] refresh done in ${Date.now() - started}ms`))
+          .catch((e) => console.error("[fgame] refresh failed", e)),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => { capped = true; resolve(); }, capMs);
+        }),
+      ]);
+      if (capped) console.log("[fgame] refresh hit time cap; main feeds already stored");
+    } finally {
+      if (timer) clearTimeout(timer);
+      running = false;
     }
   };
-  setInterval(refresh, ms);
-  void refresh();
+  setInterval(() => { void refresh(); }, ms);
+  // Let the HTTP server settle first; the sync itself is async and never
+  // blocks request handling.
+  setTimeout(() => { void refresh(); }, 3000);
 }
