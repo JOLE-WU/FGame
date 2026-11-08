@@ -170,10 +170,49 @@ final class FGAMEOAuthViewController: UIViewController, WKNavigationDelegate {
     }
 }
 
+// MARK: - Page base colour bridge
+//
+// The Capacitor web view is inset by the safe area, so the strip above the
+// status bar and the strip below the home indicator are painted by the
+// native window — they showed as pure white under the cream page. The page
+// posts its own base colour (--bg) here and we repaint the window / web view
+// with it, so both themes stay seamless. Web builds never call this.
+
+final class FGameThemeHandler: NSObject, WKScriptMessageHandler {
+    var onColor: ((UIColor) -> Void)?
+
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard message.name == "fgameTheme",
+              let hex = message.body as? String,
+              let color = UIColor(fgameHex: hex) else { return }
+        onColor?(color)
+    }
+}
+
+extension UIColor {
+    /// "#fbf4e9" / "fbf4e9" -> colour. Returns nil for anything else.
+    convenience init?(fgameHex: String) {
+        var s = fgameHex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        self.init(
+            red: CGFloat((v >> 16) & 0xFF) / 255.0,
+            green: CGFloat((v >> 8) & 0xFF) / 255.0,
+            blue: CGFloat(v & 0xFF) / 255.0,
+            alpha: 1.0
+        )
+    }
+}
+
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
     var window: UIWindow?
+    private var themeHandler: FGameThemeHandler?
+    private var themePoll: Timer?
 
     func application(
         _ application: UIApplication,
@@ -202,6 +241,69 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return true
     }
 
+    /// Registers the page-colour bridge on the Capacitor web view. Called on
+    /// becoming active (the web view exists by then) with a few delayed
+    /// retries, since the bridge must be in place before the page's first
+    /// theme post.
+    private func installThemeBridge() {
+        guard let root = window?.rootViewController?.view,
+              let web = fgameFindWebView(root) else { return }
+        if themeHandler == nil {
+            let handler = FGameThemeHandler()
+            handler.onColor = { [weak self] color in
+                guard let self = self,
+                      let root = self.window?.rootViewController?.view,
+                      let live = fgameFindWebView(root) else { return }
+                self.paint(color, in: live)
+            }
+            web.configuration.userContentController.add(handler, name: "fgameTheme")
+            web.isOpaque = false
+            web.backgroundColor = .clear
+            web.scrollView.backgroundColor = .clear
+            themeHandler = handler
+        }
+        startThemePoll()
+    }
+
+    private func paint(_ color: UIColor, in web: WKWebView) {
+        window?.backgroundColor = color
+        window?.rootViewController?.view.backgroundColor = color
+        web.backgroundColor = .clear
+        web.scrollView.backgroundColor = .clear
+    }
+
+    /// Every 1.5s, read the page's own --bg and match the window to it. This
+    /// is the reliable path: a message handler added after the web view was
+    /// created is not guaranteed to be registered, so the poll guarantees the
+    /// strips around the inset web view follow the page in both themes.
+    private func startThemePoll() {
+        guard themePoll == nil else { return }
+        syncWindowColor()
+        themePoll = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            self?.syncWindowColor()
+        }
+    }
+
+    private func syncWindowColor() {
+        guard let root = window?.rootViewController?.view,
+              let web = fgameFindWebView(root) else { return }
+        web.evaluateJavaScript("getComputedStyle(document.documentElement).getPropertyValue('--bg')") { [weak self] value, _ in
+            guard let self = self,
+                  let hex = value as? String,
+                  let color = UIColor(fgameHex: hex) else { return }
+            DispatchQueue.main.async { self.paint(color, in: web) }
+        }
+    }
+
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        installThemeBridge()
+        for delay in [0.4, 1.2, 2.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.installThemeBridge()
+            }
+        }
+    }
+
     func application(_ app: UIApplication, open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         // fgame://oauth?platform=epic&url=<percent-encoded official login URL>
@@ -226,7 +328,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     func applicationWillResignActive(_ application: UIApplication) {}
     func applicationDidEnterBackground(_ application: UIApplication) {}
     func applicationWillEnterForeground(_ application: UIApplication) {}
-    func applicationDidBecomeActive(_ application: UIApplication) {}
     func applicationWillTerminate(_ application: UIApplication) {}
 
     func application(_ application: UIApplication,
