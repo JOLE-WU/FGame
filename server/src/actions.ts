@@ -2796,18 +2796,16 @@ function extractAuthCode(input: string): string {
       // fall through to regex
     }
   }
-  const m = s.match(/[?&]code=([^&\s"]+)/);
+  const m = s.match(/[?&#]code=([^&\s"#]+)/);
   if (m && m[1]) return decodeURIComponent(m[1]);
   const j = s.match(/"authorizationCode"\s*:\s*"([^"]+)"/);
   if (j && j[1]) return j[1];
-  // Bare-code fallback: accept the whole input ONLY when it is shaped like a
-  // code (Epic's are 32 hex chars; GOG's are long alphanumerics). Anything
-  // else — prose pasted by mistake, a truncated fragment — yields "" so the
-  // caller reports “没有读到授权码” instead of shipping random text to the
-  // platform as if it were a code (verified: unshaped text previously went
-  // to Epic and came back as a misleading authorization_code_not_found).
+  // Bare-code fallback. GOG's authorization codes are base64-ish and may
+  // contain + / = ; the old [A-Za-z0-9._~-] whitelist silently rejected them
+  // and reported "没有读到授权码" even though a valid code had arrived from
+  // the native WebView. Still reject prose / CJK / absurd lengths.
   const bare = s.replace(/\s+/g, "");
-  return /^[A-Za-z0-9._~-]{16,128}$/.test(bare) ? bare : "";
+  return /^[A-Za-z0-9._~+\/=%-]{8,512}$/.test(bare) ? bare : "";
 }
 
 /** Epic OAuth failure carrying Epic's OWN error fields verbatim (HTTP status,

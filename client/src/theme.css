@@ -349,3 +349,8 @@ body {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
+
+/* Platform-account binding: keep the buttons, drop every guidance / sync /
+   diagnostic paragraph (Epic, GOG and Steam alike). */
+.bind-clean p { display: none; }
+.bind-clean p.bind-status { display: block; }

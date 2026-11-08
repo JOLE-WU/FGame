@@ -22,6 +22,12 @@ const WEB_DIR = process.env.FGAME_WEB_DIR ? resolve(process.env.FGAME_WEB_DIR) :
 const BLOBS_DIR = resolve(process.env.FGAME_BLOBS_DIR ?? "./blobs");
 const DRIZZLE_DIR = resolve(process.env.FGAME_DRIZZLE_DIR ?? "./drizzle");
 const SELF_ORIGIN = process.env.FGAME_PUBLIC_ORIGIN ?? `http://localhost:${PORT}`;
+// Published links are protected by a `sharecode` credential. A browser gets
+// an HttpOnly cookie from the page, but the iOS WKWebView loads <img> across
+// origins without that cookie, so blob/avatar URLs must carry it too.
+const BLOB_QUERY = process.env.FGAME_SHARECODE
+  ? `?sharecode=${encodeURIComponent(process.env.FGAME_SHARECODE)}`
+  : "";
 
 mkdirSync(BLOBS_DIR, { recursive: true });
 const applied = runMigrations(DRIZZLE_DIR);
@@ -66,7 +72,7 @@ const ctx: Ctx = {
   blobs: {
     async getUrl(key) {
       const p = blobPath(key);
-      return p && existsSync(p) ? `${SELF_ORIGIN}/blobs/${encodeURI(key)}` : null;
+      return p && existsSync(p) ? `${SELF_ORIGIN}/blobs/${encodeURI(key)}${BLOB_QUERY}` : null;
     },
     async put(key, bytes) {
       const p = blobPath(key);
@@ -132,6 +138,16 @@ function fileResponse(p: string): Response {
   });
 }
 
+/** Blob keys (avatars/<id>) have no extension, so sniff the magic bytes.
+ *  Without a real image/* type the iOS WKWebView may refuse to render <img>. */
+function blobMime(buf: Buffer): string {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length > 12 && buf.subarray(0, 4).toString("ascii") === "RIFF" && buf.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+  if (buf.length > 6 && buf.subarray(0, 6).toString("ascii") === "GIF89a") return "image/gif";
+  return "application/octet-stream";
+}
+
 function serveStatic(pathname: string): Response {
   if (!WEB_DIR) return json({ ok: false, error: "web build not served here" }, 404);
   const rel = pathname === "/" ? "index.html" : decodeURIComponent(pathname).replace(/^\/+/, "");
@@ -168,7 +184,10 @@ async function route(req: Request): Promise<Response> {
   if (req.method === "GET" && url.pathname.startsWith("/blobs/")) {
     const p = blobPath(decodeURIComponent(url.pathname.slice("/blobs/".length)));
     if (!p || !existsSync(p)) return json({ ok: false, error: "not found" }, 404);
-    return fileResponse(p);
+    const buf = readFileSync(p);
+    return new Response(new Uint8Array(buf), {
+      headers: { "Content-Type": blobMime(buf), ...cors },
+    });
   }
   if (req.method === "GET") return serveStatic(url.pathname);
   return json({ ok: false, error: "method not allowed" }, 405);

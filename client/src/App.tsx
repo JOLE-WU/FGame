@@ -2818,8 +2818,7 @@ function PlatformLoginPanel({
       <div className="grid gap-3">
         {autoLink === "done" ? (
           <div className="grid gap-2">
-            <p className="text-sm font-bold leading-[1.7] text-[var(--free-ink)]">✓ 已自动绑定 {name} 账号</p>
-            <p className="text-xs leading-[1.7] text-[var(--dim)]">网页登录成功后应用已自动完成绑定，游戏库会同步刷新。</p>
+            <p className="bind-status text-sm font-bold leading-[1.7] text-[var(--free-ink)]">✓ 已自动绑定 {name} 账号</p>
           </div>
         ) : (
           <>
@@ -3497,7 +3496,6 @@ function MinePage({
     queryFn: () => api.listPrimeClaimQueue({ authToken }),
   });
   const [openPanel, setOpenPanel] = useState<PlatformKey | null>(null);
-  const [panelNotes, setPanelNotes] = useState<Partial<Record<PlatformKey, string>>>({});
   const [loginGateMsg, setLoginGateMsg] = useState<string | null>(null);
 
   // --- account panel (opened by tapping the avatar on the account card):
@@ -3612,16 +3610,11 @@ function MinePage({
 
   const syncPlatform = useMutation({
     mutationFn: (platform: PlatformKey) => api.syncPlatformLibrary({ platform, authToken }),
-    onSuccess: (r, platform) => {
-      setPanelNotes((prev) => ({ ...prev, [platform]: r.note }));
-      invalidateAccountData();
-    },
-    onError: (e, platform) => setPanelNotes((prev) => ({ ...prev, [platform]: e instanceof Error ? e.message : String(e) })),
+    onSuccess: () => { invalidateAccountData(); },
   });
   const unbind = useMutation({
     mutationFn: (platform: PlatformKey) => api.unbindPlatform({ platform, authToken }),
     onSuccess: (_r, platform) => {
-      setPanelNotes((prev) => ({ ...prev, [platform]: "已解绑，本站保存的登录凭据已删除" }));
       setOpenPanel((cur) => (cur === platform ? null : cur));
       invalidateAccountData();
     },
@@ -3686,7 +3679,6 @@ function MinePage({
   const playtimeStatus = libraryQuery.data?.playtimeStatus ?? [];
   const primeLeft = primeQueueQuery.data?.items.length ?? 0;
   const openStatus = openPanel ? (data?.platforms ?? []).find((s) => s.platform === openPanel) ?? null : null;
-  const openNote = openPanel ? (panelNotes[openPanel] ?? openStatus?.lastSyncNote) : null;
 
   const gateOrToggle = (platform: PlatformKey) => {
     if (!session) {
@@ -4006,13 +3998,7 @@ function MinePage({
               </>
             ) : null}
           </div>
-          <p className="mt-2 text-xs leading-[1.7] text-[var(--dim2)]">
-            {openStatus.platform === "steam"
-              ? "点「登录绑定」弹出 Steam 官方登录页，密码只输在官网；登录后 Steam 自动跳回本页完成绑定。凭据只存服务端，解绑即删除。"
-              : "点「登录绑定」弹出平台官方登录页，密码只输在官网；登录后回这里点一次「完成绑定」。凭据只存服务端，解绑即删除。"}
-          </p>
-          {openNote ? <p className="mt-2 text-xs leading-[1.7] text-[var(--dim)]">{openNote}</p> : null}
-          <div className="mt-3 border-t border-[var(--border)] pt-3.5">
+          <div className="bind-clean mt-3 border-t border-[var(--border)] pt-3.5">
             <PlatformLoginPanel
               platform={openStatus.platform}
               status={openStatus}

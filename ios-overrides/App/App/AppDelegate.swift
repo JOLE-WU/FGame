@@ -43,31 +43,25 @@ private func fgameDetectorScript(platform: String) -> String {
     (function () {
       var PLATFORM = '\(p)';
       var reported = false;
-      function report(code) {
-        if (reported || !code || code.length < 8) return;
+      function report(payload) {
+        if (reported || !payload || payload.length < 8) return;
         reported = true;
         window.location.href = 'fgame://oauth-code?platform=' + encodeURIComponent(PLATFORM) +
-          '&code=' + encodeURIComponent(code);
+          '&code=' + encodeURIComponent(payload);
       }
       function check() {
         if (reported) return;
         try {
           var href = window.location.href || '';
           var body = (document.body && document.body.innerText) || '';
-          // Epic: /id/api/redirect renders {"authorizationCode":"..."} as JSON text.
-          if (href.indexOf('epicgames.com/id/api/redirect') !== -1) {
-            var m = body.match(/"authorizationCode"\\s*:\\s*"([^"]+)"/) ||
-                    body.match(/[?&]code=([^&\\s"]+)/);
-            if (m && m[1]) { report(m[1]); return; }
-          }
-          // GOG: the success page URL carries ?code=...
-          if (href.indexOf('on_login_success') !== -1 || href.indexOf('auth.gog.com') !== -1) {
-            var g = href.match(/[?&]code=([^&]+)/);
-            if (g && g[1]) { report(decodeURIComponent(g[1])); return; }
-          }
-          // Generic fallback: any page showing an authorizationCode blob.
-          var any = body.match(/"authorizationCode"\\s*:\\s*"([^"]+)"/);
-          if (any && any[1]) { report(any[1]); return; }
+          // Prefer the FULL success-page URL. The server parses code= out of
+          // it and accepts any code alphabet — GOG codes are base64-ish and
+          // may contain + / = (extracting the bare code here used to get it
+          // rejected downstream as "没有读到授权码").
+          if (/[?&]code=/.test(href)) { report(href); return; }
+          // Epic renders {"authorizationCode":"..."} as JSON text.
+          var m = body.match(/"authorizationCode"\\s*:\\s*"([^"]+)"/);
+          if (m && m[1]) { report(m[1]); return; }
         } catch (e) {}
         setTimeout(check, 400);
       }
