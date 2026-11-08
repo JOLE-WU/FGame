@@ -4186,7 +4186,9 @@ export const Actions = {
           inLibraryIds.add(r.id);
           continue;
         }
-        if (group === "amazon" || group === "legacy") continue;
+        // Prime channels are matched too (amazon / legacy): a Prime game
+        // already sitting in the account's library must get the same
+        // 已在库 badge the Epic/Steam/GOG ones get.
         const set = libTitles.get(group);
         if (!set) continue;
         const keys = [normName(baseTitle(r.title)), ...(r.titleZh ? [normName(baseTitle(r.titleZh))] : [])];
@@ -4562,6 +4564,9 @@ export const Actions = {
           channelLabel: z.string(),
           claimUrl: z.string().nullable(),
           endAt: z.string().nullable(),
+          // The game already sits in the library of the channel it would be
+          // redeemed into: the queue labels it 已在库中 instead of 已领.
+          inLibrary: z.boolean(),
         }),
       ),
       total: z.number(),
@@ -4586,6 +4591,25 @@ export const Actions = {
         .from(schema.marks)
         .where(and(eq(schema.marks.kind, "claimed"), eq(schema.marks.userId, uid)));
       const claimedIds = new Set(claimedRows.map((m) => m.dealId));
+      // Which of these Prime games already sit in the library of the channel
+      // they redeem into (Epic / GOG / Amazon Games App / Legacy Games)?
+      // Title-normalized so "Game: Deluxe" and "Game" still match.
+      const primeLibRows = await db
+        .select({ platform: schema.libraryItems.platform, title: schema.libraryItems.title })
+        .from(schema.libraryItems)
+        .where(eq(schema.libraryItems.userId, uid));
+      const primeLibTitles = new Map<string, Set<string>>();
+      for (const it of primeLibRows) {
+        const set = primeLibTitles.get(it.platform) ?? new Set<string>();
+        set.add(normName(it.title));
+        set.add(normName(baseTitle(it.title)));
+        primeLibTitles.set(it.platform, set);
+      }
+      const inLibraryOf = (title: string, channel: string): boolean => {
+        const set = primeLibTitles.get(channel);
+        if (!set) return false;
+        return [normName(title), normName(baseTitle(title))].some((k) => k.length > 0 && set.has(k));
+      };
       const items = prime
         .filter((r) => !claimedIds.has(r.id))
         .map((r) => {
@@ -4600,6 +4624,7 @@ export const Actions = {
             channelLabel: PRIME_CHANNEL_LABEL[channel],
             claimUrl: PRIME_CLAIM_URLS[r.externalId] ?? r.claimUrl ?? null,
             endAt: r.endAt ? r.endAt.toISOString() : null,
+            inLibrary: inLibraryOf(r.title, channel) || (r.titleZh ? inLibraryOf(r.titleZh, channel) : false),
           };
         })
         // Deadline order; games without a published deadline go last.
