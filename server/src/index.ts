@@ -17,7 +17,9 @@ import { Actions } from "./actions";
 import { db, runMigrations } from "./db";
 import type { Ctx } from "./sdk-shim";
 
-const PORT = Number(process.env.PORT ?? 8787);
+// 3000 is what the WorkBuddy publish proxy probes; anything else makes the
+// public URL answer 504 and the app hangs on its loading screen.
+const PORT = Number(process.env.PORT ?? 3000);
 const WEB_DIR = process.env.FGAME_WEB_DIR ? resolve(process.env.FGAME_WEB_DIR) : null;
 const BLOBS_DIR = resolve(process.env.FGAME_BLOBS_DIR ?? "./blobs");
 const DRIZZLE_DIR = resolve(process.env.FGAME_DRIZZLE_DIR ?? "./drizzle");
