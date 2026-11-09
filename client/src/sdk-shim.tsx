@@ -95,15 +95,48 @@ export type ClientOf<M> = {
 };
 
 export function createActionClient<M>(): ClientOf<M> {
+  // WKWebView can sit on a request indefinitely when the proxy in front of the
+  // backend is down (it answers 504 only after 30s, and the native fetch may
+  // not surface that at all) — which the user sees as "加载中" forever. Fail
+  // fast instead, so the UI can show its retry card.
+  const TIMEOUT_MS = 20_000;
+  // Server-side jobs that legitimately run for tens of seconds (library
+  // sync, code redemption, catalogue refresh). A 20s cap would have reported
+  // a successful GOG redeem — it syncs the whole library before answering —
+  // as a timeout, so these get room.
+  const SLOW_ACTIONS = new Set([
+    "redeemPrimeGogCode",
+    "syncPlatformLibrary",
+    "syncAllPlatformLibraries",
+    "refreshDeals",
+    "refreshIosFreeApps",
+    "refreshAppPrices",
+    "backfillBrandLogos",
+    "backfillIosFreeAndLogos",
+    "backfillEpicAcquiredAt",
+    "refreshPlaytimes",
+  ]);
+  const SLOW_TIMEOUT_MS = 120_000;
   const call = async (action: string, args: unknown): Promise<unknown> => {
+    const limit = SLOW_ACTIONS.has(action) ? SLOW_TIMEOUT_MS : TIMEOUT_MS;
     let res: Response;
     try {
       res = await fetch(`${API_BASE}/actions${RPC_QUERY}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action, args: args ?? {} }),
+        signal:
+          typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
+            ? AbortSignal.timeout(limit)
+            : undefined,
       });
     } catch (e) {
+      const name = e instanceof Error ? e.name : "";
+      if (name === "TimeoutError" || name === "AbortError") {
+        throw new ActionError(
+          `连接 FGame 服务超时（${Math.round(limit / 1000)} 秒无响应），请检查网络后重试。`,
+        );
+      }
       throw new ActionError(
         `无法连接 FGame 服务（${API_BASE || "当前站点"}）：${e instanceof Error ? e.message : String(e)}`,
       );
