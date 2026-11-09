@@ -1,4 +1,6 @@
 import { defineAction, z, type ActionsModule, type Ctx } from "./sdk-shim";
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import * as schema from "./schema";
 
@@ -866,6 +868,32 @@ function parseEpicMobileDiscover(data: unknown, platform: "android" | "ios"): Mo
   return { offers, topicSlugs };
 }
 
+/**
+ * Cloudflare blocks this endpoint for datacenter IPs (every attempt is 403),
+ * while a real browser gets 200. `scripts/epic-discover-snapshot.py` therefore
+ * snapshots the same feed through Chromium, and the weekly mobile giveaways —
+ * with the namespace/offerId that make the one-tap
+ * `store.epicgames.com/purchase?offers=…` checkout possible — keep syncing
+ * even when the live call is blocked. Snapshots older than a week are ignored
+ * so stale giveaways never resurrect.
+ */
+function readEpicMobileSnapshot(platform: "android" | "ios", country: string): MobileDiscoverParsed | null {
+  const dir = process.env.FGAME_EPIC_SNAPSHOT_DIR ?? join(process.cwd(), "data", "epic-discover");
+  const file = join(dir, `${platform}-${country}.json`);
+  try {
+    const st = statSync(file);
+    if (Date.now() - st.mtimeMs > 7 * 24 * 3600 * 1000) return null;
+    const data: unknown = JSON.parse(readFileSync(file, "utf8"));
+    const parsed = parseEpicMobileDiscover(data, platform);
+    if (parsed) {
+      epicMobileDiag = `直连被拦，已用本地快照 ${new Date(st.mtimeMs).toISOString().slice(0, 16).replace("T", " ")}`;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchEpicMobileDiscover(platform: "android" | "ios", country: string): Promise<MobileDiscoverParsed | null> {
   const url =
     `https://egs-platform-service.store.epicgames.com/api/v2/public/discover/home?count=10&country=${country}&locale=en&platform=${platform}&start=0&store=EGS`;
@@ -904,7 +932,8 @@ async function fetchEpicMobileDiscover(platform: "android" | "ios", country: str
       // retry, then the caller keeps the previous rows
     }
   }
-  return null;
+  // Every live attempt was blocked — fall back to the browser-made snapshot.
+  return readEpicMobileSnapshot(platform, country);
 }
 
 function buildEpicMobileDeals(
@@ -3624,11 +3653,39 @@ async function syncGogLibrary(ctx: Ctx, userId: number): Promise<{ count: number
 
 function gogErrText(json: Record<string, unknown>, raw: string, status: number): string {
   const pick = (k: string) => (typeof json[k] === "string" && json[k] ? (json[k] as string) : null);
-  const core = pick("error_description") ?? pick("reason") ?? pick("message") ?? pick("error") ?? (raw.trim() ? raw.trim().slice(0, 200) : "");
-  return core ? `HTTP ${status}：${core}` : `HTTP ${status}`;
+  const core = pick("error_description") ?? pick("reason") ?? pick("message") ?? pick("error");
+  if (core) return `HTTP ${status}：${core}`;
+  // GOG sometimes answers with a full XHTML error page (HTTP 500). Never leak
+  // that markup into the UI — the user saw 900 characters of DOCTYPE.
+  const looksHtml = /^\s*<(!doctype|html|\?xml)/i.test(raw);
+  if (looksHtml) {
+    return status === 500
+      ? "HTTP 500：GOG 兑换服务返回了错误页（通常表示这个码已被使用，或本次请求被要求网页验证）"
+      : `HTTP ${status}：GOG 返回了错误页`;
+  }
+  const text = raw.trim();
+  return text ? `HTTP ${status}：${text.slice(0, 200)}` : `HTTP ${status}`;
 }
 
-type GogRedeemOutcome = { kind: "redeemed" } | { kind: "failed"; status: number; message: string };
+/** GOG's machine-readable `reason` codes → plain Chinese. */
+function gogReasonText(reason: string): string | null {
+  const r = reason.toLowerCase();
+  if (r === "code_used" || r === "code_already_used") return "这个兑换码已经被使用过了";
+  if (r === "code_not_found" || r === "invalid_code" || r === "code_invalid") return "GOG 查不到这个兑换码，可能少输或输错了字符";
+  if (r === "code_expired") return "这个兑换码已经过期了";
+  if (r.includes("captcha")) return "GOG 要求网页验证码，自动兑换被拦下";
+  return null;
+}
+
+type GogCodeState = "used" | "missing" | "expired";
+
+type GogRedeemOutcome =
+  | { kind: "redeemed" }
+  /** `codeState` is set only when GOG positively identified the code: "used"
+   *  proves the code existed and was consumed, "missing" proves it does not
+   *  exist. Callers must not treat a library hit as success unless the code
+   *  was recognised — a random string must never be reported as redeemed. */
+  | { kind: "failed"; status: number; message: string; codeState?: GogCodeState; captcha?: boolean };
 
 /**
  * One real attempt at redeeming a GOG bonus code with the user's stored
@@ -3664,6 +3721,29 @@ async function gogRedeemAttempt(token: string, code: string): Promise<GogRedeemO
   if (lookup.status === 401) {
     return { kind: "failed", status: 401, message: gogErrText(lookupJson, lookupText, lookup.status) };
   }
+  // GOG states a code's fate on the lookup itself: 404/410 + `reason`
+  // (code_used / code_not_found / code_expired). The redeem POST cannot fix
+  // any of those — firing it anyway is what produced the raw XHTML "HTTP 500"
+  // page shown to the user, so report the real reason and stop here.
+  const lookupReason = typeof lookupJson.reason === "string" ? lookupJson.reason : null;
+  const captchaBlocked = !!lookupReason && lookupReason.toLowerCase().includes("captcha");
+  if (lookupReason && !captchaBlocked) {
+    const r = lookupReason.toLowerCase();
+    const codeState: GogCodeState | undefined =
+      r === "code_used" || r === "code_already_used"
+        ? "used"
+        : r === "code_not_found" || r === "invalid_code" || r === "code_invalid"
+          ? "missing"
+          : r === "code_expired"
+            ? "expired"
+            : undefined;
+    return {
+      kind: "failed",
+      status: lookup.status,
+      message: gogReasonText(lookupReason) ?? gogErrText(lookupJson, lookupText, lookup.status),
+      codeState,
+    };
+  }
   if (lookup.ok) {
     const products = Array.isArray(lookupJson.products) ? lookupJson.products : [];
     for (const p of products) {
@@ -3673,12 +3753,10 @@ async function gogRedeemAttempt(token: string, code: string): Promise<GogRedeemO
       if (typeof id === "number") productIds.push(id);
       else if (typeof id === "string" && /^\d+$/.test(id)) productIds.push(Number(id));
     }
-    // A definitive code state on the lookup itself (used / expired / not
-    // found comes back as a `reason` with no products): stop there and
-    // report GOG's own words instead of firing a doomed redeem POST.
-    const reason = typeof lookupJson.reason === "string" ? lookupJson.reason : null;
-    if (reason && products.length === 0) {
-      return { kind: "failed", status: lookup.status, message: gogErrText(lookupJson, lookupText, lookup.status) };
+    // A code that resolves to nothing has nothing to redeem; posting an empty
+    // product list would only earn another opaque error.
+    if (productIds.length === 0) {
+      return { kind: "failed", status: lookup.status, message: "GOG 没有返回这个码可兑换的内容（可能已被使用或已失效）" };
     }
   }
   // A blocked lookup (e.g. the captcha 403) does not prove the redeem POST is
@@ -3697,7 +3775,7 @@ async function gogRedeemAttempt(token: string, code: string): Promise<GogRedeemO
     // non-JSON body
   }
   if (res.ok) return { kind: "redeemed" };
-  return { kind: "failed", status: res.status, message: gogErrText(json, text, res.status) };
+  return { kind: "failed", status: res.status, message: gogErrText(json, text, res.status), captcha: captchaBlocked };
 }
 
 async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: number; note: string }> {
@@ -6204,28 +6282,42 @@ export const Actions = {
           fallbackUrl,
         };
       }
-      // Verify in the library before believing anything: whether the POST
-      // succeeded, or the code had already been redeemed into THIS account
-      // earlier, only a real library hit may mark the game claimed.
-      let inLibrary = false;
-      try {
-        await syncGogLibrary(ctx, uid);
-        const lib = await db
-          .select()
-          .from(schema.libraryItems)
-          .where(
-            and(
-              eq(schema.libraryItems.userId, uid),
-              eq(schema.libraryItems.platform, "gog"),
-              eq(schema.libraryItems.source, "sync"),
-            ),
-          );
-        const want = normName(baseTitle(deal.title));
-        inLibrary = lib.some((i) => normName(i.title) === want);
-      } catch {
-        inLibrary = false;
+      // A code GOG does not recognise (or an expired one) can never be the
+      // reason a game sits in the library — do not sync, and never let a
+      // pre-existing library hit masquerade as "redeemed".
+      if (outcome.kind === "failed" && (outcome.codeState === "missing" || outcome.codeState === "expired")) {
+        return {
+          ok: false,
+          state: "redeem-failed" as const,
+          note: `${outcome.message}。请核对 Amazon 领取页上的兑换码有没有输错；确认无误还是不行的话需要回 Amazon 换一个新码，也可以用下面预填了这个码的 GOG 官方页手动试一次。`,
+          fallbackUrl,
+        };
       }
-      if (inLibrary) {
+      // Mark claimed only when GOG itself vouches for the code (redeem
+      // accepted, or the code was already consumed) AND the game is
+      // verifiably in the library.
+      const codeVouched = outcome.kind === "redeemed" || outcome.codeState === "used";
+      let inLibrary = false;
+      if (codeVouched) {
+        try {
+          await syncGogLibrary(ctx, uid);
+          const lib = await db
+            .select()
+            .from(schema.libraryItems)
+            .where(
+              and(
+                eq(schema.libraryItems.userId, uid),
+                eq(schema.libraryItems.platform, "gog"),
+                eq(schema.libraryItems.source, "sync"),
+              ),
+            );
+          const want = normName(baseTitle(deal.title));
+          inLibrary = lib.some((i) => normName(i.title) === want);
+        } catch {
+          inLibrary = false;
+        }
+      }
+      if (inLibrary && codeVouched) {
         await db
           .insert(schema.marks)
           .values({ dealId: deal.id, kind: "claimed", userId: uid })
@@ -6249,10 +6341,16 @@ export const Actions = {
           fallbackUrl,
         };
       }
+      const usedAlready = outcome.kind === "failed" && outcome.codeState === "used";
+      const needsCaptcha = outcome.kind === "failed" && (outcome.captcha || /captcha|验证码/i.test(outcome.message));
       return {
         ok: false,
         state: "redeem-failed" as const,
-        note: `GOG 没有兑换成功（${outcome.message}）。码无效、已被使用或接口要求网页验证时都会这样，也没有标记已领；可以用下方预填了这个码的 GOG 官方兑换页手动完成。`,
+        note: usedAlready
+          ? "这个码在 GOG 那边已经是「已使用」状态（每个码只能用一次）。如果刚才其实兑换成功了，过几十秒再点一次「自动兑换」——会自动核对你 GOG 游戏库，到账就标记已领；如果确实没换到，需要回 Amazon 换一个新码。"
+          : needsCaptcha
+            ? "这次 GOG 要求网页验证码，自动兑换被拦下了（不是你操作的问题，GOG 现在对接口调用普遍要求人机验证）。用下面预填了这个码的 GOG 官方兑换页点一下就能完成；如果它提示码已用过，说明这个码之前已经换进你的账号了，直接点「已领，完成」即可。"
+            : `GOG 没有兑换成功（${outcome.message}）。可以用下方预填了这个码的 GOG 官方兑换页手动完成，成功后再点「已领，完成」。`,
         fallbackUrl,
       };
     },
