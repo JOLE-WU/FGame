@@ -16,6 +16,8 @@
 | 2 | **iOS 限免按区服推荐：国 / 美 / 日 / 印度 / 港区** | 服务端对每个候选用 Apple 官方 iTunes Lookup 在 5 个 storefront 分别核验 `price === 0`，把真正免费的区服写入 `deals.regions`；APP 页新增区服切换，按区过滤、按区生成领取链接、卡片显示区服徽标。选择记在 localStorage。 |
 | 3 | **云服务卡片改长条** | `CloudCard` 从 16:9 大方块封面改为「左侧方形品牌板 + 右侧标题/平台/价格/时间」的横向长条。 |
 | 4 | **命名 FGame + 图标** | `appName`/`CFBundleDisplayName` = FGame；`assets/app-icon-1024.png` 为裁好的闪电图标（去水印/白边），已放进 iOS `AppIcon.appiconset`。 |
+| 5 | **iOS 内购限免检测 + 卡片标签区分** | 两层：① 发现层扫 AppRaven 的 `appByITunesId`（一次请求拿到一个 App 全部内购的 `priceTier`，0 = 免费），候选池由 5 种排序各 20 页 + AppRaven 变价/新上架/更新流 + Apple 各区 top-free 榜单拼成（约 2300 个，`scripts/iap-scan-loop.sh` 每小时轮转 400 个）；② 核验层抓 Apple 官方应用页，页面内嵌 JSON 的「App内购买」区块给出每个内购的当前价（`¥0.00` / `¥198.00`），只有 Apple 也标 0 才收录。价格历史存 `data/iap-price-history.json`：见过收费再变 0 标「内购限免」（带原价），首次观察到的 0 元标「内购 0 元」，连续 10 天都是 0 就下架。与本体限免的区分：`iosfree-*`（tags `ios`，薄荷绿区服徽标）vs `iosiap-*`（tags `ios,iap`，紫色「内购限免」徽标）；同一个 App 两样都中时合并到本体限免那一行，不产生重名卡片。 |
+| 6 | **应用页四类筛选 + 关注** | 顶部 chips：`全部 / 本体 / 内购 / 降价 / 关注`（短名是为了 390px 一排放得下，全称在 aria-label 与区块标题里）。「关注」= 收藏过的条目：本体限免与内购限免复用详情页同一颗「收藏」（`marks` 表，跨设备、按账号），降价 App 不是 deal、没有 marks 行，存在本机 `localStorage.fgame-watch-tracks`（trackId 列表，换设备会丢但不会串号）。列表每行右侧有星标可一键关注；关注页不受区服切换与「隐藏已领」影响，各分区按收藏情况动态出现或隐藏。 |
 
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。

@@ -57,6 +57,9 @@
   --warn-bg: rgba(255, 120, 100, 0.14);
   --free-bg: rgba(143, 233, 196, 0.14);
   --free-ink: #8fe9c4;
+  /* iOS 内购限免：和本体限免的薄荷绿区分开，用紫罗兰 */
+  --iap-bg: rgba(186, 158, 255, 0.16);
+  --iap-ink: #c3a8ff;
   /* brand-logo plate (cloud/AI covers): deep navy glass in the dark
      theme so colourful marks read; cream theme overrides below */
   --logo-plate: #141b3d;
@@ -118,6 +121,8 @@
   --warn-bg: rgba(191, 69, 44, 0.1);
   --free-bg: rgba(127, 168, 124, 0.16);
   --free-ink: #527a4e;
+  --iap-bg: rgba(124, 92, 196, 0.14);
+  --iap-ink: #6b4fa8;
   /* brand-logo plate in the cream theme: solid milk white */
   --logo-plate: #fffdf8;
   --seg-track: #e9dcc9;

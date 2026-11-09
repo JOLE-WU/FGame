@@ -7,6 +7,10 @@ server/dist/
 *.tsbuildinfo
 
 # Local runtime data
+# iOS 内购扫描的运行时缓存/历史/游标：每次扫描都会重写，不进版本库
+data/iap-pool.json
+data/iap-price-history.json
+data/iap-scan-state.json
 *.db
 *.db-shm
 *.db-wal

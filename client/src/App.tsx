@@ -299,6 +299,9 @@ function platformZh(raw: string): string {
 function categoryLabel(deal: Deal): string {
   if (deal.tags.includes("ai")) return "AI 免费额度";
   if (deal.tags.includes("cloud")) return "云服务";
+  // 内购限免（tags 里的 iap）与「App 本体限免」是两种东西：本体可能
+  // 一直免费，值钱的是某个内购当前 0 元，所以分类名分开叫。
+  if (deal.tags.includes("iap")) return "iOS 内购限免";
   if (deal.tags.includes("ios") && !deal.tags.includes("game")) return "iOS 应用";
   if (deal.tags.includes("dlc")) return "DLC / 道具";
   if (deal.tags.includes("game")) return deal.tags.includes("ios") ? "手游" : "游戏";
@@ -442,12 +445,31 @@ function CoverTile({ deal, size }: { deal: Deal; size: number }) {
   );
 }
 
-/** 紧凑左图右文行：整行点击进详情，没有任何操作按钮。 */
-const MiniRow = memo(function MiniRow({ deal, now, onOpen, badge }: { deal: Deal; now: number; onOpen: (deal: Deal) => void; badge?: string }) {
+/** 紧凑左图右文行：整行点击进详情。传了 onToggleSave 时右侧多一颗星，
+ *  点星只切换关注、不打开详情（「我关注的」列表靠它攒条目）。 */
+const MiniRow = memo(function MiniRow({
+  deal,
+  now,
+  onOpen,
+  badge,
+  onToggleSave,
+}: {
+  deal: Deal;
+  now: number;
+  onOpen: (deal: Deal) => void;
+  badge?: string;
+  onToggleSave?: (deal: Deal) => void;
+}) {
   const cd = countdown(deal.endAt, now);
   const worth = money(deal.worthCents);
   const title = dealTitle(deal);
-  const platLine = [categoryLabel(deal), platformZh(deal.platform)].filter(Boolean).join(" · ").toUpperCase();
+  // 内购条目：平台字段本身已经写了「iOS · 内购 0 元」，前面再缀一个
+  // 「iOS 内购限免」分类会变成同一句话说两遍，这里只留平台行。
+  const platLine = (
+    deal.tags.includes("iap")
+      ? platformZh(deal.platform)
+      : [categoryLabel(deal), platformZh(deal.platform)].filter(Boolean).join(" · ")
+  ).toUpperCase();
   return (
     <article
       role="button"
@@ -481,6 +503,9 @@ const MiniRow = memo(function MiniRow({ deal, now, onOpen, badge }: { deal: Deal
           {deal.inLibrary && !deal.claimed ? (
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">已在库</span>
           ) : null}
+          {deal.tags.includes("iap") ? (
+            <span className="flex-none rounded-full bg-[var(--iap-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--iap-ink)]">内购限免</span>
+          ) : null}
           {badge ? (
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">{badge}</span>
           ) : null}
@@ -495,10 +520,39 @@ const MiniRow = memo(function MiniRow({ deal, now, onOpen, badge }: { deal: Deal
             </>
           )}
           <span className={`ml-auto flex-none font-mono text-[9.5px] font-medium ${deal.claimed ? "text-[var(--free-ink)]" : "text-[var(--accent)]"}`}>
-            {deal.claimed ? "已领取" : deal.status === "upcoming" ? (deal.publishedAt ? `${fmtDate(deal.publishedAt)} 开始` : "即将开始") : cd ? cd.text : deal.externalId.startsWith("iosfree-") ? "限免中" : "长期"}
+            {deal.claimed
+              ? "已领取"
+              : deal.status === "upcoming"
+                ? (deal.publishedAt ? `${fmtDate(deal.publishedAt)} 开始` : "即将开始")
+                : cd
+                  ? cd.text
+                  : deal.tags.includes("iap")
+                    ? "内购 0 元"
+                    : deal.externalId.startsWith("iosfree-")
+                      ? "限免中"
+                      : "长期"}
           </span>
         </div>
       </div>
+      {onToggleSave ? (
+        <button
+          type="button"
+          aria-label={deal.saved ? `取消关注 ${title}` : `关注 ${title}`}
+          aria-pressed={deal.saved}
+          onClick={(e) => {
+            // 整行是详情入口，星标只切关注，点击不能冒泡上去。
+            e.stopPropagation();
+            onToggleSave(deal);
+          }}
+          className={`flex h-9 w-9 flex-none items-center justify-center rounded-full border text-[16px] leading-none transition-colors ${
+            deal.saved
+              ? "border-transparent bg-grad text-[var(--accent-ink)]"
+              : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim2)]"
+          }`}
+        >
+          {deal.saved ? "★" : "☆"}
+        </button>
+      ) : null}
     </article>
   );
 });
@@ -1257,7 +1311,9 @@ function TodayPage(p: TodayProps) {
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ["deals"] });
       queryClient.invalidateQueries({ queryKey: ["appPrices"] });
-      setRefreshMsg(`已同步：GamerPower ${r.gamerpowerCount} 条 · Epic ${r.epicCount} 条 · iOS 限免 ${r.iosFreeCount} 条${r.errors.length ? ` · ${r.errors.join("；")}` : ""}`);
+      setRefreshMsg(
+        `已同步：GamerPower ${r.gamerpowerCount} 条 · Epic ${r.epicCount} 条 · iOS 本体限免 ${r.iosFreeCount} 条 · 内购限免 ${r.iapFreeCount} 条${r.errors.length ? ` · ${r.errors.join("；")}` : ""}`,
+      );
     },
     onError: (e) => setRefreshMsg(`同步失败：${e instanceof Error ? e.message : String(e)}`),
   });
@@ -1598,7 +1654,20 @@ function TodayPage(p: TodayProps) {
 
 // ---------- apps page ----------
 
-function PriceRow({ app, deal, onOpenDeal }: { app: AppPrice; deal: Deal | null; onOpenDeal: (d: Deal) => void }) {
+function PriceRow({
+  app,
+  deal,
+  onOpenDeal,
+  watched,
+  onToggleWatch,
+}: {
+  app: AppPrice;
+  deal: Deal | null;
+  onOpenDeal: (d: Deal) => void;
+  /** 降价行的关注存在本机（trackId 列表），不依赖它有没有关联 deal。 */
+  watched?: boolean;
+  onToggleWatch?: (app: AppPrice) => void;
+}) {
   const inner = (
     <>
       {app.iconUrl ? (
@@ -1623,15 +1692,48 @@ function PriceRow({ app, deal, onOpenDeal }: { app: AppPrice; deal: Deal | null;
           )}
         </div>
       </div>
-      <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
+      {/* 有星标时尾部只留一个动作，免得「→ ☆」两个符号挤在一起。 */}
+      {onToggleWatch ? null : (
+        <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
+      )}
+      {onToggleWatch ? (
+        <button
+          type="button"
+          aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+          aria-pressed={watched}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleWatch(app);
+          }}
+          className={`flex h-9 w-9 flex-none items-center justify-center rounded-full border text-[16px] leading-none transition-colors ${
+            watched
+              ? "border-transparent bg-grad text-[var(--accent-ink)]"
+              : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim2)]"
+          }`}
+        >
+          {watched ? "★" : "☆"}
+        </button>
+      ) : null}
     </>
   );
   const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md";
   if (deal) {
     return (
-      <button type="button" aria-label={`查看详情：${app.name}`} onClick={() => onOpenDeal(deal)} className={cls}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`查看详情：${app.name}`}
+        onClick={() => onOpenDeal(deal)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpenDeal(deal);
+          }
+        }}
+        className={`${cls} cursor-pointer`}
+      >
         {inner}
-      </button>
+      </div>
     );
   }
   if (app.storeUrl) {
@@ -1644,8 +1746,54 @@ function PriceRow({ app, deal, onOpenDeal }: { app: AppPrice; deal: Deal | null;
   return <div className={cls}>{inner}</div>;
 }
 
-function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal[]; now: number; onOpen: (d: Deal) => void; hideClaimed: boolean; hideHidden: boolean }) {
-  const [chip, setChip] = useState<"all" | "free" | "drop">("all");
+function AppsPage({
+  deals,
+  now,
+  onOpen,
+  hideClaimed,
+  hideHidden,
+  authToken,
+}: {
+  deals: Deal[];
+  now: number;
+  onOpen: (d: Deal) => void;
+  hideClaimed: boolean;
+  hideHidden: boolean;
+  authToken?: string;
+}) {
+  const [chip, setChip] = useState<"all" | "free" | "iap" | "drop" | "watch">("all");
+  const queryClient = useQueryClient();
+  // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
+  const toggleSave = useMutation({
+    mutationFn: (deal: Deal) => api.toggleMark({ dealId: deal.id, kind: "saved", authToken }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["deals"] });
+      void queryClient.invalidateQueries({ queryKey: ["library"] });
+    },
+  });
+  const onToggleSave = (deal: Deal) => toggleSave.mutate(deal);
+  // 降价 App 是价格跟踪表里的一行、不一定是 deal，所以它的关注存在本机
+  //（trackId 列表）：换设备会丢，但不会和别人共享同一个后端时串号。
+  const [watchTracks, setWatchTracks] = useState<number[]>(() => {
+    try {
+      const raw = localStorage.getItem("fgame-watch-tracks");
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr.filter((x): x is number => typeof x === "number") : [];
+    } catch {
+      return [];
+    }
+  });
+  const toggleTrack = (trackId: number) => {
+    setWatchTracks((prev) => {
+      const next = prev.includes(trackId) ? prev.filter((x) => x !== trackId) : [...prev, trackId];
+      try {
+        localStorage.setItem("fgame-watch-tracks", JSON.stringify(next));
+      } catch {
+        /* 隐私模式下写不了，至少本次会话内有效 */
+      }
+      return next;
+    });
+  };
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   // 记住用户选择的 App Store 区服（本设备）。默认国区。
@@ -1685,7 +1833,10 @@ function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal
       });
   }, [deals, region, activeTab.cc]);
 
-  const freeApps = useMemo(
+  // 两组分开：iosfree-* 是「App 本体限免」，iosiap-* 是「内购限免」
+  //（本体本来免费，值钱的是某个内购现在 0 元）。合并行两样都算，但仍
+  // 归在「本体限免」组里，靠卡片上的紫色内购徽标提示。
+  const visibleApps = useMemo(
     () =>
       regionFree.filter(
         (d) =>
@@ -1695,9 +1846,56 @@ function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal
       ),
     [regionFree, hideClaimed, hideHidden, q],
   );
+  // 内购限免条目只核验了国区（内购价格按 cn 页面读的），所以不跟着
+  // 上面的区服切换走，也不做链接换区 —— 否则切到美区会整组消失。
+  const iapOnlyApps = useMemo(
+    () =>
+      deals.filter(
+        (d) =>
+          d.externalId.startsWith("iosiap-") &&
+          d.status === "active" &&
+          (!hideClaimed || !d.claimed) &&
+          (!hideHidden || !d.hidden) &&
+          (!q || `${d.title} ${d.titleZh ?? ""}`.toLowerCase().includes(q)),
+      ),
+    [deals, hideClaimed, hideHidden, q],
+  );
+  const freeApps = useMemo(
+    () => visibleApps.filter((d) => !d.externalId.startsWith("iosiap-")),
+    [visibleApps],
+  );
   const apps = pricesQuery.data?.apps ?? [];
   const drops = apps.filter((a) => a.isDrop && (!q || a.name.toLowerCase().includes(q)));
   const dealById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals]);
+
+  // 「我关注的」= 收藏过的应用条目（本体限免 + 内购限免，跨区服，不跟
+  // 区服切换走；隐藏/已领开关也不影响，关注了就该看得见）+ 收藏过的
+  // 降价 App（降价行本身不是一个 deal，靠 dealId 关联到详情条目）。
+  const watchHit = (d: Deal) => !q || `${d.title} ${d.titleZh ?? ""}`.toLowerCase().includes(q);
+  const watchFree = useMemo(
+    () => deals.filter((d) => d.appStore && d.saved && !d.externalId.startsWith("iosiap-") && watchHit(d)),
+    [deals, q],
+  );
+  const watchIap = useMemo(
+    () => deals.filter((d) => d.externalId.startsWith("iosiap-") && d.saved && watchHit(d)),
+    [deals, q],
+  );
+  const watchDrops = useMemo(
+    () => apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId) && (!q || a.name.toLowerCase().includes(q))),
+    [apps, watchTracks, q],
+  );
+  const watchCount = watchFree.length + watchIap.length + watchDrops.length;
+
+  const watchMode = chip === "watch";
+  const freeList = watchMode ? watchFree : freeApps;
+  const iapList = watchMode ? watchIap : iapOnlyApps;
+  const dropList = watchMode ? watchDrops : drops;
+  const showFreeSec = chip === "free" || chip === "all" || (watchMode && freeList.length > 0);
+  const showIapSec = chip === "iap" || chip === "all" || (watchMode && iapList.length > 0);
+  const showDropSec = chip === "drop" || chip === "all" || (watchMode && dropList.length > 0);
+  const noFree = "01";
+  const noIap = showFreeSec ? "02" : "01";
+  const noDrop = showFreeSec ? (showIapSec ? "03" : "02") : showIapSec ? "02" : "01";
 
   return (
     <div>
@@ -1706,9 +1904,13 @@ function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
       </div>
       <ChipsRow label="应用筛选">
+        {/* 五个 chip 要在 390px 宽里排得下：标签用短名，全称放 aria-label
+            和下面的区块标题里，横滑不必用户自己发现。 */}
         <Chip active={chip === "all"} onClick={() => setChip("all")} label="全部" ariaLabel="全部应用" />
-        <Chip active={chip === "free"} onClick={() => setChip("free")} label="限免" count={freeApps.length} ariaLabel="只看限免应用" />
+        <Chip active={chip === "free"} onClick={() => setChip("free")} label="本体" count={freeApps.length} ariaLabel="只看本体限免应用" />
+        <Chip active={chip === "iap"} onClick={() => setChip("iap")} label="内购" count={iapOnlyApps.length} ariaLabel="只看内购限免应用" />
         <Chip active={chip === "drop"} onClick={() => setChip("drop")} label="降价" count={drops.length} ariaLabel="只看降价应用" />
+        <Chip active={chip === "watch"} onClick={() => setChip("watch")} label="关注" count={watchCount} ariaLabel="只看我关注的" />
       </ChipsRow>
       <input
         aria-label="搜索应用"
@@ -1718,46 +1920,63 @@ function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal
         className="mt-2 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
       />
 
-      {chip !== "drop" ? (
+      {watchMode && watchCount === 0 ? (
+        <EmptyNote
+          title="还没有关注的 App"
+          sub="在卡片右侧点 ☆（或进详情点「收藏」），本体限免、内购限免、降价都能关注；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
+        />
+      ) : null}
+
+      {showFreeSec ? (
         <>
-          {/* 区服切换：国 / 美 / 日 / 印度 / 港，按 Apple 官方逐区核验结果推荐 */}
-          <div className="mt-3 flex items-center gap-2">
-            <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">区服</span>
-            <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {IOS_REGION_TABS.map((t) => (
-                <button
-                  key={t.code}
-                  type="button"
-                  aria-pressed={region === t.code}
-                  onClick={() => changeRegion(t.code)}
-                  className={`flex-none whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[10.5px] font-medium leading-none transition-colors ${
-                    region === t.code
-                      ? "border-transparent bg-grad font-bold text-[var(--accent-ink)]"
-                      : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-            {region === "all"
-              ? "展示全部区服已核验的限免 · 徽标标注该应用可用的区服"
-              : `仅显示在${activeTab.label} App Store 官方核验为 ¥0 的限免 · 需切换到该区账号领取`}
-          </p>
+          {!watchMode ? (
+            <>
+              {/* 区服切换：国 / 美 / 日 / 印度 / 港，按 Apple 官方逐区核验结果推荐 */}
+              <div className="mt-3 flex items-center gap-2">
+                <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">区服</span>
+                <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {IOS_REGION_TABS.map((t) => (
+                    <button
+                      key={t.code}
+                      type="button"
+                      aria-pressed={region === t.code}
+                      onClick={() => changeRegion(t.code)}
+                      className={`flex-none whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[10.5px] font-medium leading-none transition-colors ${
+                        region === t.code
+                          ? "border-transparent bg-grad font-bold text-[var(--accent-ink)]"
+                          : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+                {region === "all"
+                  ? "展示全部区服已核验的限免 · 徽标标注该应用可用的区服"
+                  : `仅显示在${activeTab.label} App Store 官方核验为 ¥0 的限免 · 需切换到该区账号领取`}
+              </p>
+            </>
+          ) : null}
 
           <SectionHead
-            no="01"
-            title="iOS 限免"
-            en={region === "all" ? "FREE · ALL REGIONS" : `FREE · ${activeTab.label.toUpperCase()}`}
+            no={noFree}
+            title="本体限免"
+            en={
+              watchMode
+                ? "WATCHED · APP FREE"
+                : region === "all"
+                  ? "APP FREE · ALL REGIONS"
+                  : `APP FREE · ${activeTab.label.toUpperCase()}`
+            }
           />
-          {freeApps.length > 0 ? (
+          {freeList.length > 0 ? (
             <div className="flex flex-col gap-[9px]">
-              {freeApps.map((d) => {
+              {freeList.map((d) => {
                 const codes = d.regions && d.regions.length ? d.regions : ["cn"];
                 const badge = codes.map((c) => IOS_REGION_LABEL[c] ?? c).join("·");
-                return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} />;
+                return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} onToggleSave={onToggleSave} />;
               })}
             </div>
           ) : (
@@ -1769,15 +1988,48 @@ function AppsPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal
         </>
       ) : null}
 
-      {chip !== "free" ? (
+      {showIapSec ? (
         <>
-          <SectionHead no="02" title="降价" en="PRICE DROPS" />
+          {/* 内购限免：App 本体本来就免费，值钱的是某个内购此刻标价
+              ¥0.00。和上面的本体限免分开列，卡片上是紫色徽标。 */}
+          <SectionHead no={noIap} title="内购限免" en={watchMode ? "WATCHED · IN-APP" : "IN-APP · ¥0"} />
+          {watchMode ? null : (
+            <p className="mb-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+              内购价格逐条取自 App Store 官方应用页（国区页面）；标「内购限免」的是我们见过它收费、现在变 0 元，
+              标「内购 0 元」的是首次观察到的 0 元内购。
+            </p>
+          )}
+          {iapList.length > 0 ? (
+            <div className="flex flex-col gap-[9px]">
+              {iapList.map((d) => (
+                <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge="国区" onToggleSave={onToggleSave} />
+              ))}
+            </div>
+          ) : (
+            <EmptyNote
+              title="暂无内购限免"
+              sub="每天会扫一遍 App Store 上带内购的免费 App，发现内购标价 0 元就收进来；这一批还没扫到。"
+            />
+          )}
+        </>
+      ) : null}
+
+      {showDropSec ? (
+        <>
+          <SectionHead no={noDrop} title="降价" en={watchMode ? "WATCHED · PRICE DROPS" : "PRICE DROPS"} />
           {pricesQuery.isPending ? (
             <p className="py-8 text-center text-sm text-[var(--dim)]">加载中…</p>
-          ) : drops.length > 0 ? (
+          ) : dropList.length > 0 ? (
             <div className="flex flex-col gap-[9px]">
-              {drops.map((a) => (
-                <PriceRow key={a.trackId} app={a} deal={a.dealId != null ? (dealById.get(a.dealId) ?? null) : null} onOpenDeal={onOpen} />
+              {dropList.map((a) => (
+                <PriceRow
+                  key={a.trackId}
+                  app={a}
+                  deal={a.dealId != null ? (dealById.get(a.dealId) ?? null) : null}
+                  onOpenDeal={onOpen}
+                  watched={watchTracks.includes(a.trackId)}
+                  onToggleWatch={(x) => toggleTrack(x.trackId)}
+                />
               ))}
             </div>
           ) : (
@@ -5320,7 +5572,7 @@ export function App() {
             onToggleTheme={toggleTheme}
           />
         ) : tab === "apps" ? (
-          <AppsPage deals={deals} now={now} onOpen={openDetail} hideClaimed={hideClaimed} hideHidden={hideHidden} />
+          <AppsPage deals={deals} now={now} onOpen={openDetail} hideClaimed={hideClaimed} hideHidden={hideHidden} authToken={session?.token} />
         ) : tab === "games" ? (
           <GamesPage
             deals={deals}
