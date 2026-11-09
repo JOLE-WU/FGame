@@ -692,16 +692,19 @@ function EmptyNote({ title, sub }: { title: string; sub?: string }) {
 
 const enrichAttempted = new Set<number>();
 
-// Epic mobile-offer hop note (measured 2026-11-08, see DATA-PLAN
-// "Epic 手游领取跳转实测"): on a PHONE browser, Epic routes the mobile
-// offers' purchase deep link to its mobile-app download page instead of
-// the checkout page — Epic's server-side behaviour for mobile-store
-// offers, not something this page can change (the same link opened in a
-// desktop browser lands on the $0 checkout). The copy states that
-// honestly and gives the working route, instead of promising the
-// checkout page or looping the user back to the same link.
+// Epic mobile offers are claimed on the web checkout
+// (`store.epicgames.com/purchase?offers=…`), which is exactly what the
+// "one-tap claim" posts use — no Epic app needed. The checkout needs a signed
+// in Epic account in the SAME browser, otherwise Epic bounces a phone visitor
+// to its app-download landing page. So the flow is: sign in (this button
+// returns to the checkout), then order at ¥0.
 const EPIC_MOBILE_HOP_NOTE =
-  "注意：用手机打开上面的下单链接，会被 Epic 跳到手机端 App 下载页 — 这是 Epic 对手游商品的固定跳转，网页侧改不了。想在网页领取：长按复制链接，到电脑浏览器打开就是 0 元下单页，登录后点「下订单」即领完。";
+  "手机会员注意：Epic 的下单页要求先在同一个浏览器里登录 Epic。没登录时它会把你导向 App 下载页 —— 先点下面「先登录 Epic」，登录完会自动回到这个 0 元下单页，再点「下订单」即可。";
+
+/** Epic login that returns to `target` once signed in. */
+function epicLoginUrl(target: string): string {
+  return `https://www.epicgames.com/id/login?lang=zh-CN&redirectUrl=${encodeURIComponent(target)}`;
+}
 
 function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Deal; now: number; onClose: () => void; authToken?: string; onQueueClaim?: (d: Deal) => void }) {
   const queryClient = useQueryClient();
@@ -957,6 +960,17 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
               {deal.source.includes("Epic") ? "Epic 商城领取" : "来源平台领取"}
             </span>
           )}
+          {mobileDeal && deal.claimUrl ? (
+            <a
+              href={epicLoginUrl(deal.claimUrl)}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`先登录 Epic 账号再领取 ${mainTitle}`}
+              className="flex h-[46px] items-center justify-center gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
+            >
+              先登录 Epic（登录后自动回下单页）
+            </a>
+          ) : null}
           {deal.gamePlatform === "prime" ? (
             <p className="text-center text-xs leading-relaxed text-[var(--dim2)]">领取需 Amazon Prime 会员 · 点「去领取」直达官方领取页，按标注渠道兑换入库</p>
           ) : null}
