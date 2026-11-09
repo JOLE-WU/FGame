@@ -9,6 +9,7 @@ useState,
 type CSSProperties,
 type FormEvent,
 type ReactNode,
+type TouchEvent as ReactTouchEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SafeAreaTopScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
@@ -841,8 +842,64 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
         : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
     }`;
 
+  // 右滑返回：从屏幕左侧约 1/3 内起手、横向位移明显大于纵向时才认，
+  // 并避开页面里的横向滚动区（截图画廊），免得和左右翻图打架。拖动时
+  // 整页跟手位移，松手超过 96px 就关闭，否则弹回原位。
+  const swipeStart = useRef<{ x: number; y: number; ok: boolean } | null>(null);
+  const swipeDx = useRef(0);
+  const [swipeX, setSwipeX] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const finishSwipe = (commit: boolean) => {
+    const s = swipeStart.current;
+    const dx = swipeDx.current;
+    swipeStart.current = null;
+    swipeDx.current = 0;
+    setSwiping(false);
+    setSwipeX(0);
+    if (commit && s?.ok && dx > 96) onClose();
+  };
+  const onSwipeStart = (e: ReactTouchEvent<HTMLDivElement>) => {
+    const t = e.touches[0];
+    if (!t || e.touches.length !== 1 || lightbox != null) return;
+    const edge = Math.min(120, window.innerWidth * 0.32);
+    const el = e.target as HTMLElement | null;
+    if (t.clientX > edge || el?.closest?.(".overflow-x-auto")) return;
+    swipeStart.current = { x: t.clientX, y: t.clientY, ok: true };
+    swipeDx.current = 0;
+    setSwiping(true);
+  };
+  const onSwipeMove = (e: ReactTouchEvent<HTMLDivElement>) => {
+    const s = swipeStart.current;
+    const t = e.touches[0];
+    if (!s?.ok || !t) return;
+    const dx = t.clientX - s.x;
+    const dy = t.clientY - s.y;
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+      s.ok = false;
+      swipeDx.current = 0;
+      setSwipeX(0);
+      return;
+    }
+    const next = dx > 0 ? Math.min(dx, 320) : 0;
+    swipeDx.current = next;
+    setSwipeX(next);
+  };
+
   return (
-    <div className="v-scroll-only fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label={`详情：${mainTitle}`}>
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`详情：${mainTitle}`}
+      onTouchStart={onSwipeStart}
+      onTouchMove={onSwipeMove}
+      onTouchEnd={() => finishSwipe(true)}
+      onTouchCancel={() => finishSwipe(false)}
+      style={{
+        transform: swipeX > 0 ? `translateX(${swipeX}px)` : undefined,
+        transition: swiping ? "none" : "transform 180ms cubic-bezier(.2,.8,.2,1)",
+      }}
+    >
       <SafeAreaTopScrim backgroundColor="var(--bg)" />
       <div className="sticky top-0 z-10 bg-[var(--bg)]/90 backdrop-blur-md">
         <div className="mx-auto flex w-full max-w-3xl items-center px-4 py-3">
@@ -2046,7 +2103,11 @@ function GamesPage({
   now,
   onOpen,
   hideClaimed,
+  setHideClaimed,
   hideHidden,
+  setHideHidden,
+  onlySaved,
+  setOnlySaved,
   onOpenPrimeClaim,
   session,
   onNeedLogin,
@@ -2056,13 +2117,31 @@ function GamesPage({
   now: number;
   onOpen: (d: Deal) => void;
   hideClaimed: boolean;
+  setHideClaimed: (v: boolean) => void;
   hideHidden: boolean;
+  setHideHidden: (v: boolean) => void;
+  onlySaved: boolean;
+  setOnlySaved: (v: boolean | ((p: boolean) => boolean)) => void;
   onOpenPrimeClaim: () => void;
   session: Session | null;
   onNeedLogin: () => void;
   onOpenBatchClaim: (items: Deal[]) => void;
 }) {
   const [plat, setPlat] = useState<string>("all");
+  // 与首页同一套筛选开关（共享状态），另加一个只在本页生效的「未领取」。
+  const [unclaimedOnly, setUnclaimedOnly] = useState(false);
+  const gameDeals = useMemo(() => deals.filter((d) => d.tags.includes("game") || d.tags.includes("dlc")), [deals]);
+  const claimedCount = useMemo(() => gameDeals.filter((d) => d.claimed).length, [gameDeals]);
+  const hiddenCount = useMemo(() => gameDeals.filter((d) => d.hidden).length, [gameDeals]);
+  const savedCount = useMemo(() => gameDeals.filter((d) => d.saved).length, [gameDeals]);
+  const filtersOn = plat !== "all" || unclaimedOnly || hideClaimed || hideHidden || onlySaved;
+  const resetFilters = () => {
+    setPlat("all");
+    setUnclaimedOnly(false);
+    setHideClaimed(false);
+    setHideHidden(false);
+    setOnlySaved(false);
+  };
   // 长按多选：selecting 为多选模式开关，selOrder 按选中先后记条目 id
   // （队列就按这个顺序逐款领取）；状态挂在页面组件上，切平台 chip 不丢。
   const [selecting, setSelecting] = useState(false);
@@ -2103,7 +2182,9 @@ function GamesPage({
                   ? d.gamePlatform === "epic" && !d.epicMobile
                   : d.gamePlatform === plat) &&
             (!hideClaimed || !d.claimed) &&
-            (!hideHidden || !d.hidden),
+            (!hideHidden || !d.hidden) &&
+            (!onlySaved || d.saved) &&
+            (!unclaimedOnly || !d.claimed),
         )
         .sort((a, b) => {
           if (plat === "prime") {
@@ -2124,7 +2205,7 @@ function GamesPage({
           if (!b.endAt) return -1;
           return new Date(a.endAt).getTime() - new Date(b.endAt).getTime();
         }),
-    [deals, plat, hideClaimed, hideHidden],
+    [deals, plat, hideClaimed, hideHidden, onlySaved, unclaimedOnly],
   );
   const visibleSelectable = useMemo(() => list.filter((d) => !d.inLibrary), [list]);
   const selectAllVisible = () => {
@@ -2172,6 +2253,18 @@ function GamesPage({
         {GAME_PLATFORMS.map((g) => (
           <Chip key={g.key} active={plat === g.key} onClick={() => setPlat(g.key)} label={g.label} ariaLabel={`游戏平台 ${g.label}`} />
         ))}
+      </ChipsRow>
+      {/* 和首页一致的筛选行：库里已有的游戏现在自动算「已领」，所以
+          「隐藏已领」会一并把它们藏掉。计数只算游戏，不含应用/云服务。 */}
+      {/* 短名 + 排序是为了 390px 一屏尽量放得下：常用的「隐藏已领 /
+          不感兴趣 / 收藏」排前，重复的「未领」放最后，横滑一下就到。
+          点「全部」即清空所有筛选，不用再单独放一个重置按钮。 */}
+      <ChipsRow label="游戏筛选">
+        <Chip active={!filtersOn} onClick={resetFilters} label="全部" ariaLabel="显示全部游戏（清除筛选）" />
+        <Chip active={hideClaimed} onClick={() => setHideClaimed(!hideClaimed)} label="隐藏已领" count={claimedCount} ariaLabel="隐藏已领取游戏" />
+        <Chip active={hideHidden} onClick={() => setHideHidden(!hideHidden)} label="不感兴趣" count={hiddenCount} ariaLabel="隐藏不感兴趣游戏" />
+        <Chip active={onlySaved} onClick={() => setOnlySaved(!onlySaved)} label="收藏" count={savedCount} ariaLabel="只看我收藏的游戏" />
+        <Chip active={unclaimedOnly} onClick={() => setUnclaimedOnly((v) => !v)} label="未领" ariaLabel="只看未领取游戏" />
       </ChipsRow>
       {plat === "prime" ? (
         <section className="mt-4 flex items-center gap-3 rounded-[16px] border border-[var(--glass-edge)] bg-[var(--surface)] shadow-[var(--glass-hi)] backdrop-blur-md p-3.5">
@@ -2227,7 +2320,10 @@ function GamesPage({
             })()}
           </>
         ) : (
-          <EmptyNote title="这个平台暂时没有限免" sub="每日同步会按平台补齐 Epic / Steam / GOG 的赠送；Prime 会员游戏按官方领取截止日收录，过截止日的自动下架。" />
+          <EmptyNote
+            title={filtersOn ? "当前筛选没有游戏" : "这个平台暂时没有限免"}
+            sub={filtersOn ? "关掉「隐藏已领」「只看收藏」等筛选，或点上面「重置」看看。" : "每日同步会按平台补齐 Epic / Steam / GOG 的赠送；Prime 会员游戏按官方领取截止日收录，过截止日的自动下架。"}
+          />
         )}
       </div>
       {selecting ? (
@@ -5579,7 +5675,11 @@ export function App() {
             now={now}
             onOpen={openDetail}
             hideClaimed={hideClaimed}
+            setHideClaimed={setHideClaimed}
             hideHidden={hideHidden}
+            setHideHidden={setHideHidden}
+            onlySaved={onlySaved}
+            setOnlySaved={setOnlySaved}
             onOpenPrimeClaim={() => setPrimeFlowOpen(true)}
             session={session}
             onNeedLogin={() => setTab("mine")}

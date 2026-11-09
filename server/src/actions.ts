@@ -440,7 +440,11 @@ function toDeal(
     status: row.status,
     usersCount: row.usersCount,
     saved: savedIds.has(row.id),
-    claimed: claimedIds.has(row.id),
+    // 已同步的游戏库里已经存在这款游戏时，自动按「已领」展示：对用户来
+    // 说库里有 = 已经拿到了，不必再领一次。只合并显示字段，不写 marks 表，
+    // 所以「手动标记已领」仍是用户自己的记录；inLibraryIds 只装 game/dlc，
+    // 应用、云服务那些条目不受影响。
+    claimed: claimedIds.has(row.id) || inLibraryIds.has(row.id),
     hidden: hiddenIds.has(row.id),
     inLibrary: inLibraryIds.has(row.id),
     isCustom: row.externalId.startsWith("custom-"),
