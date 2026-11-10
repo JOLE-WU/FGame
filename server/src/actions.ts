@@ -4399,6 +4399,35 @@ async function gogRedeemAttempt(token: string, code: string): Promise<GogRedeemO
   return { kind: "failed", status: res.status, message: gogErrText(json, text, res.status), captcha: captchaBlocked };
 }
 
+/** Steam publishes TWO different artworks for every app:
+ *   • header.jpg              460×215  LANDSCAPE banner (store shelf / news)
+ *   • library_600x900_2x.jpg  600×900  PORTRAIT capsule (the library grid)
+ *  The library grid is a full-bleed 3:4 cover box, so feeding it the
+ *  landscape header cropped every logo in half — exactly the "横屏截取"
+ *  look: only the middle strip of the banner survived. Owned-game rows must
+ *  use the portrait capsule. Both URLs are deterministic from the appid;
+ *  the _2x variant is simply the retina size of the same artwork. */
+const steamLibraryCover = (appid: string | number) =>
+  `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${appid}/library_600x900_2x.jpg`;
+
+/** Repair rows synced before the portrait switch (and any future row that
+ *  somehow still points at header.jpg) at READ time, so already-installed
+ *  apps show correct covers without a resync or a new IPA. */
+function normalizeLibraryCover(platform: string, imageUrl: string | null, extKey: string | null): string | null {
+  if (platform !== "steam") return imageUrl;
+  const url = imageUrl ?? "";
+  // An empty cover is deliberate: a handful of apps (DLC / tool / VR
+  // variants) have NO portrait capsule on Steam's CDN at all. Keep it
+  // empty so SafeImg shows its designed placeholder instead of firing a
+  // doomed 404 request.
+  if (!url) return null;
+  const id = url.match(/\/steam\/apps\/(\d+)\//)?.[1] ?? (/^\d+$/.test(extKey ?? "") ? extKey : null);
+  if (!id) return imageUrl;
+  if (/library_600x900/.test(url)) return imageUrl;
+  if (/header\.jpg|capsule_/.test(url)) return steamLibraryCover(id);
+  return imageUrl;
+}
+
 async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: number; note: string }> {
   const row = await getAccountRow(ctx, userId, "steam");
   if (!row || !row.accountRef) throw new Error("尚未绑定 Steam 账号");
@@ -4454,11 +4483,16 @@ async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: numb
     const key = String(g.appid);
     const existing = existingByKey.get(key);
     if (existing) {
+      // A cover already resolved to a portrait capsule (or deliberately
+      // left empty for an app with no portrait asset) must survive a
+      // re-sync: blindly writing the 2x URL again would bring back a 404
+      // for those few apps.
+      const coverResolved = /library_600x900/.test(existing.imageUrl ?? "") || !existing.imageUrl;
       await db
         .update(schema.libraryItems)
         .set({
           title: g.name,
-          imageUrl: `https://cdn.akamai.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
+          ...(coverResolved ? {} : { imageUrl: steamLibraryCover(g.appid) }),
           playtimeMinutes: typeof g.playtime_forever === "number" ? g.playtime_forever : existing.playtimeMinutes,
           playtimeUpdatedAt: typeof g.playtime_forever === "number" ? Date.now() : existing.playtimeUpdatedAt,
         })
@@ -4471,7 +4505,7 @@ async function syncSteamLibrary(ctx: Ctx, userId: number): Promise<{ count: numb
           platform: "steam",
           userId,
           title: g.name,
-          imageUrl: `https://cdn.akamai.steamstatic.com/steam/apps/${g.appid}/header.jpg`,
+          imageUrl: steamLibraryCover(g.appid),
           playtimeMinutes: typeof g.playtime_forever === "number" ? g.playtime_forever : null,
           playtimeUpdatedAt: typeof g.playtime_forever === "number" ? Date.now() : null,
           source: "sync",
@@ -6312,7 +6346,7 @@ export const Actions = {
         byGroup.get(it.platform)?.push({
           key: `item-${it.id}`,
           title: it.title,
-          imageUrl: it.imageUrl ?? null,
+          imageUrl: normalizeLibraryCover(it.platform, it.imageUrl ?? null, it.extKey ?? null),
           playtimeMinutes: it.playtimeMinutes ?? null,
           playtimeUpdatedAt: it.playtimeUpdatedAt ? new Date(it.playtimeUpdatedAt).toISOString() : null,
           // The platform's own acquisition date when it reports one
