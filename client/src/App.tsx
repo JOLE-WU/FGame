@@ -1358,6 +1358,7 @@ function TodayPage(p: TodayProps) {
   const [unclaimedOnly, setUnclaimedOnly] = useState(false);
   const [category, setCategory] = useState<string>("all");
   const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const deferredSearch = useDeferredValue(search);
   const [sort, setSort] = useState<SortKey>("expiry");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
@@ -1647,13 +1648,24 @@ function TodayPage(p: TodayProps) {
             ))}
           </div>
           <div className="mt-3 flex gap-2">
-            <input
-              aria-label="搜索羊毛"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="搜索"
-              className="min-w-0 flex-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
-            />
+            <div className="relative min-w-0 flex-1">
+              <input
+                ref={searchRef}
+                aria-label="搜索羊毛"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="搜索"
+                className="w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] py-2.5 pl-3.5 pr-10 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
+              />
+              {search ? (
+                <SearchClearButton
+                  onClear={() => {
+                    setSearch("");
+                    searchRef.current?.focus();
+                  }}
+                />
+              ) : null}
+            </div>
             <select aria-label="排序方式" value={sort} onChange={(e) => setSort(e.target.value as SortKey)} className="shrink-0 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-2.5 py-2.5 text-[13px] font-medium text-[var(--text)] backdrop-blur-md">
               <option value="expiry">即将过期</option>
               <option value="newest">最新发布</option>
@@ -1904,6 +1916,21 @@ function StoreRow({
   return <div className={cls}>{inner}</div>;
 }
 
+// 搜索框右侧的一键清除：只在有输入时出现，清空后把焦点还给输入框，
+// 这样用户不用手动删字、也不用重新点输入框就能直接开始下一次搜索。
+function SearchClearButton({ onClear }: { onClear: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="清除搜索内容"
+      onClick={onClear}
+      className="absolute right-2 top-1/2 flex h-[22px] w-[22px] -translate-y-1/2 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--surface2)] text-[11px] font-bold leading-none text-[var(--dim)] transition-colors active:text-[var(--text)]"
+    >
+      ✕
+    </button>
+  );
+}
+
 function AppsPage({
   deals,
   now,
@@ -1982,6 +2009,7 @@ function AppsPage({
   };
   const storeWatchIds = useMemo(() => new Set(storeWatch.map((x) => x.trackId)), [storeWatch]);
   const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const deferredSearch = useDeferredValue(search);
   // 记住用户选择的 App Store 区服（本设备）。默认国区。
   const [region, setRegion] = useState<string>(() => {
@@ -2131,13 +2159,24 @@ function AppsPage({
         <Chip active={chip === "drop"} onClick={() => setChip("drop")} label="降价" count={countDrop} ariaLabel="只看降价应用" />
         <Chip active={chip === "watch"} onClick={() => setChip("watch")} label="关注" count={countWatch} ariaLabel="只看我关注的" />
       </ChipsRow>
-      <input
-        aria-label="搜索应用"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="搜索应用 · 含 App Store 全库"
-        className="mt-2 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
-      />
+      <div className="relative mt-2">
+        <input
+          ref={searchRef}
+          aria-label="搜索应用"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="搜索应用 · 含 App Store 全库"
+          className="w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] py-2.5 pl-3.5 pr-10 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
+        />
+        {search ? (
+          <SearchClearButton
+            onClear={() => {
+              setSearch("");
+              searchRef.current?.focus();
+            }}
+          />
+        ) : null}
+      </div>
       {/* 区服放在搜索框正下方：切一下就同时改变「本体限免」和
           「App Store 全库」的检索范围，不用再滚到区块里找。 */}
       <div className="mt-2.5 flex items-center gap-2">

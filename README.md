@@ -22,6 +22,7 @@
 | 8 | **应用页接入 App Store 全库搜索** | 搜索框原来只过滤本站已收录的 `deals` / `app_price_snapshots`，输入清单外的应用名会三个区块全空、五个 chip 计数全变 0，看起来像整页没数据。现新增服务端 `searchAppStore`，代理 Apple 官方 iTunes Search API（`country` 跟随区服切换、`limit=25`、12s 超时、5 分钟内存缓存），返回图标 / 名称 / 开发者 / 类型 / 现价 / 评分 / 商店链接，并按 `trackId` 与本站 `deals`（`iosfree-*` / `iosiap-*`）、`app_watch`、`app_price_snapshots` 交叉标记「本体限免 / 内购限免 / 降价」徽标。前端在搜索词 ≥2 字时于清单上方新增「App Store 全库」区块，点击直达官方商店页；chip 计数改为只受隐藏开关影响、不再随关键词归零；三个空状态文案区分「搜索无匹配」与「数据为空」。 |
 | 9 | **Steam 游戏库封面改竖版** | 库同步原先用 `header.jpg`（460×215 横版横幅），在 3:4 竖版网格里被 `object-cover` 裁成中间一条。改用 Steam 官方 `library_600x900_2x.jpg`（600×900），`listLibrary` 读取时归一化历史横版链接，数据库里 125 条记录全部迁移；4 款官方确无竖版资产的应用回退到设计占位图，ARK 用 1x 竖版。 |
 | 10 | **区服快捷切换 + 全库搜索结果可关注** | 区服切换行从「本体限免」区块内部移到搜索框正下方（任何筛选 chip 下都可见），切区服同时作用于「本体限免」与 `searchAppStore` 的 `country`，即全库检索范围也跟着变。App Store 全库结果每行新增 ☆ 关注：这些结果不是 deal、没有 `dealId` 可写 `marks`，所以把完整条目存本机 `localStorage.fgame-store-watch`（与降价关注同一取舍，换设备不同步但不会串号）；「关注」页新增「关注的应用」区块回看、可取消关注，关注 chip 计数也包含它们。星标按钮在 `<a>` 内用 `preventDefault` 阻止跳转，只切换关注。 |
+| 11 | **搜索框一键清除** | 应用页「搜索应用」与首页「搜索羊毛」两个输入框右侧新增圆形 ✕ 清除按钮（`SearchClearButton`，仅在有输入时渲染，输入框加 `pr-10` 预留空间）。点击后清空关键词并立即把焦点还给输入框，可直接输入开始下一次搜索；应用页清空后「App Store 全库」区块按 `q.length >= 2` 条件自动收起、chip 计数恢复，不会残留上一次的搜索结果。 |
 
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
