@@ -1810,7 +1810,15 @@ function PriceRow({
  * not to be claimed. A badge marks ones this site also tracks, so the user
  * knows to scroll down for the free/drop detail card.
  */
-function StoreRow({ app }: { app: StoreApp }) {
+function StoreRow({
+  app,
+  watched,
+  onToggleWatch,
+}: {
+  app: StoreApp;
+  watched?: boolean;
+  onToggleWatch?: (app: StoreApp) => void;
+}) {
   const cls =
     "flex w-full items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md";
   const inner = (
@@ -1860,7 +1868,30 @@ function StoreRow({ app }: { app: StoreApp }) {
           ) : null}
         </div>
       </div>
-      <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
+      {onToggleWatch ? null : (
+        <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
+      )}
+      {onToggleWatch ? (
+        <button
+          type="button"
+          aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+          aria-pressed={watched}
+          onClick={(e) => {
+            // The whole row is an App Store link; the star must only toggle
+            // the watch and never follow that link.
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleWatch(app);
+          }}
+          className={`flex h-9 w-9 flex-none items-center justify-center rounded-full border text-[16px] leading-none transition-colors ${
+            watched
+              ? "border-transparent bg-grad text-[var(--accent-ink)]"
+              : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim2)]"
+          }`}
+        >
+          {watched ? "★" : "☆"}
+        </button>
+      ) : null}
     </>
   );
   if (app.storeUrl) {
@@ -1921,6 +1952,35 @@ function AppsPage({
       return next;
     });
   };
+  // Full-catalogue search hits are neither deals nor rows in the price-watch
+  // table, so there is no dealId to write into `marks`. Store the complete
+  // entry locally (same trade-off as price-drop watches) and list them in
+  // their own section on the 关注 page.
+  const [storeWatch, setStoreWatch] = useState<StoreApp[]>(() => {
+    try {
+      const raw = localStorage.getItem("fgame-store-watch");
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr)
+        ? arr.filter((x): x is StoreApp => !!x && typeof x.trackId === "number" && typeof x.name === "string")
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  const toggleStoreWatch = (app: StoreApp) => {
+    setStoreWatch((prev) => {
+      const next = prev.some((x) => x.trackId === app.trackId)
+        ? prev.filter((x) => x.trackId !== app.trackId)
+        : [app, ...prev];
+      try {
+        localStorage.setItem("fgame-store-watch", JSON.stringify(next));
+      } catch {
+        /* 隐私模式下写不了，至少本次会话内有效 */
+      }
+      return next;
+    });
+  };
+  const storeWatchIds = useMemo(() => new Set(storeWatch.map((x) => x.trackId)), [storeWatch]);
   const [search, setSearch] = useState("");
   const deferredSearch = useDeferredValue(search);
   // 记住用户选择的 App Store 区服（本设备）。默认国区。
@@ -2023,6 +2083,10 @@ function AppsPage({
     () => apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId) && (!q || a.name.toLowerCase().includes(q))),
     [apps, watchTracks, q],
   );
+  const watchStore = useMemo(
+    () => storeWatch.filter((a) => !q || a.name.toLowerCase().includes(q)),
+    [storeWatch, q],
+  );
   // Chip counts must NOT shrink with the search keyword — otherwise typing
   // any name makes all five chips read 0 and the page looks empty. Counts
   // follow the hide switches only; the keyword filters the lists below.
@@ -2038,7 +2102,8 @@ function AppsPage({
   const countWatch =
     deals.filter((d) => d.appStore && d.saved && !d.externalId.startsWith("iosiap-")).length +
     deals.filter((d) => d.externalId.startsWith("iosiap-") && d.saved).length +
-    apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId)).length;
+    apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId)).length +
+    storeWatch.length;
 
   const watchMode = chip === "watch";
   const freeList = watchMode ? watchFree : freeApps;
@@ -2073,8 +2138,32 @@ function AppsPage({
         placeholder="搜索应用 · 含 App Store 全库"
         className="mt-2 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
       />
+      {/* 区服放在搜索框正下方：切一下就同时改变「本体限免」和
+          「App Store 全库」的检索范围，不用再滚到区块里找。 */}
+      <div className="mt-2.5 flex items-center gap-2">
+        <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">区服</span>
+        <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {IOS_REGION_TABS.map((t) => (
+            <button
+              key={t.code}
+              type="button"
+              aria-pressed={region === t.code}
+              onClick={() => changeRegion(t.code)}
+              className={`flex-none whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[10.5px] font-medium leading-none transition-colors ${
+                region === t.code
+                  ? "border-transparent bg-grad font-bold text-[var(--accent-ink)]"
+                  : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
       <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        同时搜本站限免 / 降价清单与 {activeTab.label} App Store 全库 · 输入至少 2 个字开始全库检索
+        {region === "all"
+          ? "全部区服：本体限免展示已核验的全部条目 · 全库搜索按国区检索 · 输入 ≥2 字开始搜"
+          : `本体限免仅显示在${activeTab.label}官方核验为 ¥0 的条目，全库搜索也按${activeTab.label} · 领取需切换该区账号`}
       </p>
 
       {q.length >= 2 ? (
@@ -2085,9 +2174,21 @@ function AppsPage({
           ) : storeQuery.isError ? (
             <EmptyNote title="App Store 搜索暂时不可用" sub="Apple 接口没响应或网络超时，稍后重试；下方本站收录清单不受影响。" />
           ) : storeHits.length > 0 ? (
-            <div className="flex flex-col gap-[9px]">
-              {storeHits.map((a) => <StoreRow key={a.trackId} app={a} />)}
-            </div>
+            <>
+              <div className="flex flex-col gap-[9px]">
+                {storeHits.map((a) => (
+                  <StoreRow
+                    key={a.trackId}
+                    app={a}
+                    watched={storeWatchIds.has(a.trackId)}
+                    onToggleWatch={toggleStoreWatch}
+                  />
+                ))}
+              </div>
+              <p className="mt-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+                点右侧 ☆ 关注任意应用，之后在「关注」页随时回看（关注存在本设备）。
+              </p>
+            </>
           ) : (
             <EmptyNote
               title={`${activeTab.label}没找到「${deferredSearch.trim()}」`}
@@ -2105,43 +2206,12 @@ function AppsPage({
       {watchMode && countWatch === 0 ? (
         <EmptyNote
           title="还没有关注的 App"
-          sub="在卡片右侧点 ☆（或进详情点「收藏」），本体限免、内购限免、降价都能关注；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
+          sub="在卡片右侧点 ☆（App Store 全库搜索结果、本体限免、内购限免、降价都能关注），或进详情点「收藏」；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
         />
       ) : null}
 
       {showFreeSec ? (
         <>
-          {!watchMode ? (
-            <>
-              {/* 区服切换：国 / 美 / 日 / 印度 / 港，按 Apple 官方逐区核验结果推荐 */}
-              <div className="mt-3 flex items-center gap-2">
-                <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">区服</span>
-                <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {IOS_REGION_TABS.map((t) => (
-                    <button
-                      key={t.code}
-                      type="button"
-                      aria-pressed={region === t.code}
-                      onClick={() => changeRegion(t.code)}
-                      className={`flex-none whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[10.5px] font-medium leading-none transition-colors ${
-                        region === t.code
-                          ? "border-transparent bg-grad font-bold text-[var(--accent-ink)]"
-                          : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
-                      }`}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-                {region === "all"
-                  ? "展示全部区服已核验的限免 · 徽标标注该应用可用的区服"
-                  : `仅显示在${activeTab.label} App Store 官方核验为 ¥0 的限免 · 需切换到该区账号领取`}
-              </p>
-            </>
-          ) : null}
-
           <SectionHead
             no={noFree}
             title="本体限免"
@@ -2226,6 +2296,21 @@ function AppsPage({
               sub={q ? "上方 App Store 全库结果可查任意应用当前价；本站只对追踪中的应用记录历史价并标真实降价。" : "价格每天记录一次快照，现价低于记录到的历史价才会出现在这里。"}
             />
           )}
+        </>
+      ) : null}
+
+      {/* 全库搜索结果关注的 App：不是 deal，单独一组回看。 */}
+      {watchMode && watchStore.length > 0 ? (
+        <>
+          <SectionHead no="04" title="关注的应用" en="WATCHED · APP STORE" />
+          <div className="flex flex-col gap-[9px]">
+            {watchStore.map((a) => (
+              <StoreRow key={a.trackId} app={a} watched onToggleWatch={toggleStoreWatch} />
+            ))}
+          </div>
+          <p className="mt-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+            这些是从 App Store 全库搜索结果里关注的 App，保存在本设备；换设备或清缓存不会同步。
+          </p>
         </>
       ) : null}
     </div>
