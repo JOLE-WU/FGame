@@ -24,6 +24,7 @@ declare const __FGAME_BUILD__: string;
 
 type Deal = ApiResponse<typeof api, "listDeals">["deals"][number];
 type AppPrice = ApiResponse<typeof api, "listAppPrices">["apps"][number];
+type StoreApp = ApiResponse<typeof api, "searchAppStore">["apps"][number];
 type AccountData = ApiResponse<typeof api, "getAccounts">;
 type PlatformStatus = AccountData["platforms"][number];
 type LibraryGroup = ApiResponse<typeof api, "listLibrary">["groups"][number];
@@ -1803,6 +1804,75 @@ function PriceRow({
   return <div className={cls}>{inner}</div>;
 }
 
+/**
+ * A result from the WHOLE App Store catalogue (not a collected deal). Tapping
+ * always opens the official store listing — these apps are here to be found,
+ * not to be claimed. A badge marks ones this site also tracks, so the user
+ * knows to scroll down for the free/drop detail card.
+ */
+function StoreRow({ app }: { app: StoreApp }) {
+  const cls =
+    "flex w-full items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md";
+  const inner = (
+    <>
+      {app.iconUrl ? (
+        <SafeImg
+          src={app.iconUrl}
+          alt=""
+          label={app.name}
+          phFontSize={22}
+          className="h-[54px] w-[54px] flex-none rounded-[12px] border border-[var(--border)] bg-[var(--surface2)] object-cover"
+          loading="lazy"
+          decoding="async"
+        />
+      ) : (
+        <div
+          aria-hidden="true"
+          className="flex h-[54px] w-[54px] flex-none items-center justify-center rounded-[12px] bg-[var(--surface2)] font-serif text-xl font-bold text-[var(--dim)]"
+        >
+          {(app.name.trim()[0] ?? "A").toUpperCase()}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <h4 className="truncate text-[13px] font-bold leading-[1.3] text-[var(--text)]">{app.name}</h4>
+        <p className="mt-1 truncate font-mono text-[9.5px] uppercase tracking-[0.03em] text-[var(--dim2)]">
+          {[app.sellerName, app.genre].filter(Boolean).join(" · ") || "APP STORE"}
+        </p>
+        <div className="mt-1.5 flex items-baseline gap-[7px]">
+          <b className={`text-xs font-bold ${app.price === 0 ? "text-[var(--free-ink)]" : "text-[var(--text)]"}`}>
+            {app.price === 0 ? "免费" : app.formattedPrice}
+          </b>
+          {app.tag ? (
+            <span
+              className={`flex-none rounded-full px-1.5 py-[2px] text-[9px] font-bold leading-none ${
+                app.tag === "内购限免"
+                  ? "bg-[var(--iap-bg)] text-[var(--iap-ink)]"
+                  : app.tag === "降价"
+                    ? "bg-[var(--warn-bg)] text-[var(--warn)]"
+                    : "bg-[var(--free-bg)] text-[var(--free-ink)]"
+              }`}
+            >
+              {app.tag}
+            </span>
+          ) : null}
+          {app.rating != null && app.rating > 0 ? (
+            <span className="ml-auto flex-none font-mono text-[9.5px] text-[var(--dim2)]">★ {app.rating.toFixed(1)}</span>
+          ) : null}
+        </div>
+      </div>
+      <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
+    </>
+  );
+  if (app.storeUrl) {
+    return (
+      <a href={app.storeUrl} target="_blank" rel="noreferrer" aria-label={`在 App Store 打开 ${app.name}`} className={cls}>
+        {inner}
+      </a>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
+}
+
 function AppsPage({
   deals,
   now,
@@ -1869,6 +1939,18 @@ function AppsPage({
 
   const q = deferredSearch.trim().toLowerCase();
   const activeTab = IOS_REGION_TABS.find((t) => t.code === region) ?? IOS_REGION_TABS[1]!;
+  const storeCountry = activeTab.cc;
+  // The search box used to filter ONLY the collected deals / price drops, so
+  // any app not currently on a giveaway showed three empty sections. Now it
+  // also queries Apple's full catalogue for the selected storefront.
+  const storeQuery = useQuery({
+    queryKey: ["appStoreSearch", storeCountry, deferredSearch.trim()],
+    queryFn: () => api.searchAppStore({ query: deferredSearch.trim(), country: storeCountry }),
+    enabled: deferredSearch.trim().length >= 2,
+    staleTime: 5 * 60_000,
+    retry: 1,
+  });
+  const storeHits = storeQuery.data?.apps ?? [];
 
   // 把某区服下可见的 iOS 限免条目取出，并把领取链接换成该区 App Store。
   // 旧数据（regions 为空）按「国区」兜底，保持兼容。
@@ -1941,7 +2023,22 @@ function AppsPage({
     () => apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId) && (!q || a.name.toLowerCase().includes(q))),
     [apps, watchTracks, q],
   );
-  const watchCount = watchFree.length + watchIap.length + watchDrops.length;
+  // Chip counts must NOT shrink with the search keyword — otherwise typing
+  // any name makes all five chips read 0 and the page looks empty. Counts
+  // follow the hide switches only; the keyword filters the lists below.
+  const countFree = useMemo(
+    () => regionFree.filter((d) => !d.externalId.startsWith("iosiap-") && (!hideClaimed || !d.claimed) && (!hideHidden || !d.hidden)).length,
+    [regionFree, hideClaimed, hideHidden],
+  );
+  const countIap = useMemo(
+    () => deals.filter((d) => d.externalId.startsWith("iosiap-") && d.status === "active" && (!hideClaimed || !d.claimed) && (!hideHidden || !d.hidden)).length,
+    [deals, hideClaimed, hideHidden],
+  );
+  const countDrop = apps.filter((a) => a.isDrop).length;
+  const countWatch =
+    deals.filter((d) => d.appStore && d.saved && !d.externalId.startsWith("iosiap-")).length +
+    deals.filter((d) => d.externalId.startsWith("iosiap-") && d.saved).length +
+    apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId)).length;
 
   const watchMode = chip === "watch";
   const freeList = watchMode ? watchFree : freeApps;
@@ -1964,20 +2061,48 @@ function AppsPage({
         {/* 五个 chip 要在 390px 宽里排得下：标签用短名，全称放 aria-label
             和下面的区块标题里，横滑不必用户自己发现。 */}
         <Chip active={chip === "all"} onClick={() => setChip("all")} label="全部" ariaLabel="全部应用" />
-        <Chip active={chip === "free"} onClick={() => setChip("free")} label="本体" count={freeApps.length} ariaLabel="只看本体限免应用" />
-        <Chip active={chip === "iap"} onClick={() => setChip("iap")} label="内购" count={iapOnlyApps.length} ariaLabel="只看内购限免应用" />
-        <Chip active={chip === "drop"} onClick={() => setChip("drop")} label="降价" count={drops.length} ariaLabel="只看降价应用" />
-        <Chip active={chip === "watch"} onClick={() => setChip("watch")} label="关注" count={watchCount} ariaLabel="只看我关注的" />
+        <Chip active={chip === "free"} onClick={() => setChip("free")} label="本体" count={countFree} ariaLabel="只看本体限免应用" />
+        <Chip active={chip === "iap"} onClick={() => setChip("iap")} label="内购" count={countIap} ariaLabel="只看内购限免应用" />
+        <Chip active={chip === "drop"} onClick={() => setChip("drop")} label="降价" count={countDrop} ariaLabel="只看降价应用" />
+        <Chip active={chip === "watch"} onClick={() => setChip("watch")} label="关注" count={countWatch} ariaLabel="只看我关注的" />
       </ChipsRow>
       <input
         aria-label="搜索应用"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        placeholder="搜索应用"
+        placeholder="搜索应用 · 含 App Store 全库"
         className="mt-2 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
       />
+      <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+        同时搜本站限免 / 降价清单与 {activeTab.label} App Store 全库 · 输入至少 2 个字开始全库检索
+      </p>
 
-      {watchMode && watchCount === 0 ? (
+      {q.length >= 2 ? (
+        <>
+          <SectionHead no="00" title="App Store 全库" en={`SEARCH · ${activeTab.label.toUpperCase()}`} />
+          {storeQuery.isPending ? (
+            <p className="py-8 text-center text-sm text-[var(--dim)]">正在搜索 App Store…</p>
+          ) : storeQuery.isError ? (
+            <EmptyNote title="App Store 搜索暂时不可用" sub="Apple 接口没响应或网络超时，稍后重试；下方本站收录清单不受影响。" />
+          ) : storeHits.length > 0 ? (
+            <div className="flex flex-col gap-[9px]">
+              {storeHits.map((a) => <StoreRow key={a.trackId} app={a} />)}
+            </div>
+          ) : (
+            <EmptyNote
+              title={`${activeTab.label}没找到「${deferredSearch.trim()}」`}
+              sub="换个名字或少打几个字，也可以切换上方区服再搜；下方是本站收录清单的匹配结果。"
+            />
+          )}
+          {storeHits.some((a) => a.tag) ? (
+            <p className="mt-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+              带徽标的应用本站也已收录（本体限免 / 内购限免 / 降价），往下看对应区块可点进详情。
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {watchMode && countWatch === 0 ? (
         <EmptyNote
           title="还没有关注的 App"
           sub="在卡片右侧点 ☆（或进详情点「收藏」），本体限免、内购限免、降价都能关注；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
@@ -2038,8 +2163,14 @@ function AppsPage({
             </div>
           ) : (
             <EmptyNote
-              title={region === "all" ? "暂无限免应用" : `${activeTab.label}暂无限免应用`}
-              sub={region === "all" ? "本页只收录 App Store 限免，确认上架的才会出现在这里。" : "换一个区服看看，或点上方「全部区服」。每条限免都经该区 App Store 官方价格核验。"}
+              title={q ? "本站收录里没有匹配的限免应用" : region === "all" ? "暂无限免应用" : `${activeTab.label}暂无限免应用`}
+              sub={
+                q
+                  ? "这不是页面没数据：上方是 App Store 全库结果，本站只收录经官方核验为 ¥0 的限免。清空搜索框可看全部收录。"
+                  : region === "all"
+                    ? "本页只收录 App Store 限免，确认上架的才会出现在这里。"
+                    : "换一个区服看看，或点上方「全部区服」。每条限免都经该区 App Store 官方价格核验。"
+              }
             />
           )}
         </>
@@ -2064,8 +2195,8 @@ function AppsPage({
             </div>
           ) : (
             <EmptyNote
-              title="暂无内购限免"
-              sub="每天会扫一遍 App Store 上带内购的免费 App，发现内购标价 0 元就收进来；这一批还没扫到。"
+              title={q ? "本站收录里没有匹配的内购限免" : "暂无内购限免"}
+              sub={q ? "上方 App Store 全库结果不受收录范围限制；清空搜索框可看全部已核验的内购限免。" : "每天会扫一遍 App Store 上带内购的免费 App，发现内购标价 0 元就收进来；这一批还没扫到。"}
             />
           )}
         </>
@@ -2090,7 +2221,10 @@ function AppsPage({
               ))}
             </div>
           ) : (
-            <EmptyNote title="暂无真实降价" sub="价格每天记录一次快照，现价低于记录到的历史价才会出现在这里。" />
+            <EmptyNote
+              title={q ? "本站收录里没有匹配的降价应用" : "暂无真实降价"}
+              sub={q ? "上方 App Store 全库结果可查任意应用当前价；本站只对追踪中的应用记录历史价并标真实降价。" : "价格每天记录一次快照，现价低于记录到的历史价才会出现在这里。"}
+            />
           )}
         </>
       ) : null}

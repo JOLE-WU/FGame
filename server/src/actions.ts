@@ -4696,6 +4696,14 @@ const batchVerifyResponse = z.object({
   syncNotes: z.array(z.object({ platform: z.enum(["epic", "steam", "gog"]), note: z.string() })),
 });
 
+// Full-catalogue App Store search (Apple iTunes Search API). Read-only: it
+// never writes to the tracked watch list. Results are cached briefly per
+// storefront + term so typing in the search box doesn't hammer Apple on
+// every keystroke.
+const APP_SEARCH_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", "kr", "sg", "au"]);
+const APP_SEARCH_TTL_MS = 5 * 60_000;
+const appSearchCache = new Map<string, { at: number; rows: Record<string, unknown>[] }>();
+
 export const Actions = {
   registerAccount: defineAction({
     description: "Registers an in-app account (username + password; password stored only as a salted PBKDF2 hash) and returns a session token. The FIRST registered account adopts the legacy un-owned pool of platform bindings, library rows and marks created before accounts existed.",
@@ -5605,6 +5613,141 @@ export const Actions = {
       }
       apps.sort((a, b) => Number(b.isDrop) - Number(a.isDrop) || b.dropPct - a.dropPct);
       return { apps };
+    },
+  }),
+
+  /**
+   * Search the WHOLE App Store catalogue, not just the deals this site has
+   * collected. The APP page's search box used to filter only `deals` and
+   * `app_price_snapshots`, so any app not on a current giveaway / price drop
+   * simply showed three empty sections — with chip counts all reading 0,
+   * which looked like the whole page had no data. This proxies Apple's
+   * official iTunes Search API and marks results that we already track.
+   */
+  searchAppStore: defineAction({
+    description: "Searches the full App Store catalogue via Apple's official iTunes Search API for a given storefront, and marks results this site already tracks as a free / in-app-purchase-free / price-drop item. Read-only and independent of the collected deals list.",
+    request: z.object({
+      query: z.string().trim().min(1).max(80),
+      country: z.string().trim().min(2).max(5).optional(),
+    }),
+    response: z.object({
+      country: z.string(),
+      apps: z.array(
+        z.object({
+          trackId: z.number(),
+          name: z.string(),
+          iconUrl: z.string().nullable(),
+          storeUrl: z.string().nullable(),
+          sellerName: z.string().nullable(),
+          genre: z.string().nullable(),
+          price: z.number(),
+          formattedPrice: z.string(),
+          currency: z.string(),
+          rating: z.number().nullable(),
+          ratingCount: z.number().nullable(),
+          collected: z.boolean(),
+          tag: z.string().nullable(),
+          dealId: z.number().nullable(),
+        }),
+      ),
+    }),
+    async handler(ctx, args) {
+      const db = ctx.db<typeof schema>();
+      const country = APP_SEARCH_COUNTRIES.has(args.country ?? "cn") ? (args.country ?? "cn") : "cn";
+      const term = args.query.trim().slice(0, 80);
+      const cacheKey = `${country}:${term.toLowerCase()}`;
+      const cached = appSearchCache.get(cacheKey);
+      let rows: Record<string, unknown>[] = [];
+      if (cached && Date.now() - cached.at < APP_SEARCH_TTL_MS) {
+        rows = cached.rows;
+      } else {
+        try {
+          const res = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=${country}&entity=software&limit=25`,
+            {
+              headers: { "User-Agent": "Mozilla/5.0" },
+              signal: AbortSignal.timeout(12_000),
+            },
+          );
+          if (res.ok) {
+            const data = (await res.json()) as Record<string, unknown>;
+            rows = Array.isArray(data.results) ? (data.results as Record<string, unknown>[]) : [];
+            appSearchCache.set(cacheKey, { at: Date.now(), rows });
+            if (appSearchCache.size > 120) {
+              for (const k of [...appSearchCache.keys()].slice(0, 40)) appSearchCache.delete(k);
+            }
+          }
+        } catch {
+          // Apple unreachable / timed out: return an empty full-catalogue
+          // section but leave the collected-deals sections intact.
+          rows = [];
+        }
+      }
+
+      // Cross-reference against what this site already collected, by trackId.
+      const dealRows = await db
+        .select({ id: schema.deals.id, externalId: schema.deals.externalId, status: schema.deals.status })
+        .from(schema.deals);
+      const byTrack = new Map<number, { tag: string; dealId: number }>();
+      for (const d of dealRows) {
+        if (d.status !== "active" && d.status !== "upcoming") continue;
+        const m = /^ios(free|iap)-(\d+)$/.exec(d.externalId);
+        if (!m) continue;
+        const tid = Number(m[2]);
+        if (!Number.isFinite(tid)) continue;
+        const tag = m[1] === "iap" ? "内购限免" : "本体限免";
+        const prev = byTrack.get(tid);
+        if (!prev || tag === "内购限免") byTrack.set(tid, { tag, dealId: d.id });
+      }
+      const watched = await db.select({ trackId: schema.appWatch.trackId }).from(schema.appWatch);
+      const watchedIds = new Set(watched.map((w) => w.trackId));
+      const snaps = await db
+        .select({
+          trackId: schema.appPriceSnapshots.trackId,
+          priceCents: schema.appPriceSnapshots.priceCents,
+          checkedAt: schema.appPriceSnapshots.checkedAt,
+        })
+        .from(schema.appPriceSnapshots);
+      const grouped = new Map<number, { at: number; cents: number }[]>();
+      for (const s of snaps) {
+        const arr = grouped.get(s.trackId) ?? [];
+        arr.push({ at: s.checkedAt, cents: s.priceCents });
+        grouped.set(s.trackId, arr);
+      }
+      const dropIds = new Set<number>();
+      for (const [tid, list] of grouped) {
+        list.sort((a, b) => a.at - b.at);
+        const latest = list[list.length - 1];
+        const max = Math.max(...list.map((x) => x.cents));
+        if (latest && latest.cents < max) dropIds.add(tid);
+      }
+
+      const apps = rows
+        .filter((r) => typeof r.trackId === "number" && typeof r.trackName === "string" && r.wrapperType === "software")
+        .map((r) => {
+          const trackId = r.trackId as number;
+          const hit = byTrack.get(trackId);
+          const isDrop = dropIds.has(trackId);
+          const art = typeof r.artworkUrl100 === "string" ? (r.artworkUrl100 as string) : null;
+          return {
+            trackId,
+            name: String(r.trackName),
+            iconUrl: art ? art.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/200x200bb.$1") : null,
+            storeUrl: typeof r.trackViewUrl === "string" ? (r.trackViewUrl as string) : null,
+            sellerName: typeof r.sellerName === "string" ? (r.sellerName as string) : null,
+            genre: typeof r.primaryGenreName === "string" ? (r.primaryGenreName as string) : null,
+            price: typeof r.price === "number" ? (r.price as number) : 0,
+            formattedPrice: typeof r.formattedPrice === "string" ? (r.formattedPrice as string) : "免费",
+            currency: typeof r.currency === "string" ? (r.currency as string) : "CNY",
+            rating: typeof r.averageUserRating === "number" ? (r.averageUserRating as number) : null,
+            ratingCount: typeof r.userRatingCount === "number" ? (r.userRatingCount as number) : null,
+            collected: !!hit || isDrop || watchedIds.has(trackId),
+            tag: hit?.tag ?? (isDrop ? "降价" : null),
+            dealId: hit?.dealId ?? null,
+          };
+        })
+        .slice(0, 25);
+      return { country, apps };
     },
   }),
 
