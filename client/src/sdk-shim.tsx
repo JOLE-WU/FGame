@@ -115,6 +115,11 @@ export function createActionClient<M>(): ClientOf<M> {
     "backfillIosFreeAndLogos",
     "backfillEpicAcquiredAt",
     "refreshPlaytimes",
+    // End-of-queue 验库 re-syncs every involved bound library before it
+    // can answer. A single Epic sync alone takes ~30s (770+ titles), and a
+    // queue spanning Epic+Steam+GOG can take a minute — a 20s cap made a
+    // perfectly successful verify look like a network timeout.
+    "verifyBatchClaim",
   ]);
   const SLOW_TIMEOUT_MS = 120_000;
   const call = async (action: string, args: unknown): Promise<unknown> => {

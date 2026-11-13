@@ -63,7 +63,6 @@ const CATEGORIES = [
 const GAME_PLATFORMS = [
   { key: "all", label: "全部" },
   { key: "epic", label: "Epic" },
-  { key: "epic-mobile", label: "Epic 手游" },
   { key: "steam", label: "Steam" },
   { key: "gog", label: "GOG" },
   { key: "prime", label: "Prime 会员" },
@@ -748,14 +747,15 @@ function EmptyNote({ title, sub }: { title: string; sub?: string }) {
 
 const enrichAttempted = new Set<number>();
 
-// Epic mobile offers are claimed on the web checkout
-// (`store.epicgames.com/purchase?offers=…`), which is exactly what the
-// "one-tap claim" posts use — no Epic app needed. The checkout needs a signed
-// in Epic account in the SAME browser, otherwise Epic bounces a phone visitor
-// to its app-download landing page. So the flow is: sign in (this button
-// returns to the checkout), then order at ¥0.
-const EPIC_MOBILE_HOP_NOTE =
-  "手机会员注意：Epic 的下单页要求先在同一个浏览器里登录 Epic。没登录时它会把你导向 App 下载页 —— 先点下面「先登录 Epic」，登录完会自动回到这个 0 元下单页，再点「下订单」即可。";
+// Epic offers are claimed on the web checkout
+// (`store.epicgames.com/purchase?offers=…`) — the same link the "one-tap
+// claim" posts use, no Epic app needed. But the checkout REQUIRES an Epic
+// session in the same browser: without one it answers "Account id is
+// missing" / funnels a phone visitor to the PC store page. So the CTA goes
+// through Epic's login with the checkout as redirectUrl: signed-in users
+// land on the 0-yuan checkout immediately, others return to it after login.
+const EPIC_LOGIN_HOP_NOTE =
+  "Epic 的 0 元结算页要求在同一个浏览器里登录 Epic 账号；没登录时会被导向 PC 商店页或报错。「打开结算页」按钮会先带你登录，登录完自动回到结算页，再点「下订单」即领完。";
 
 /** Epic login that returns to `target` once signed in. */
 function epicLoginUrl(target: string): string {
@@ -1059,7 +1059,7 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
             <span className="rounded-[14px] bg-[var(--surface2)] px-4 py-3.5 text-center text-[15px] font-medium text-[var(--dim)]">未开始</span>
           ) : deal.claimUrl ? (
             <a
-              href={deal.claimUrl}
+              href={purchaseMain ? epicLoginUrl(deal.claimUrl) : deal.claimUrl}
               target="_blank"
               rel="noreferrer"
               aria-label={`去领取 ${mainTitle}`}
@@ -1072,15 +1072,15 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
               {deal.source.includes("Epic") ? "Epic 商城领取" : "来源平台领取"}
             </span>
           )}
-          {mobileDeal && deal.claimUrl ? (
+          {purchaseMain && deal.claimUrl ? (
             <a
-              href={epicLoginUrl(deal.claimUrl)}
+              href={deal.claimUrl}
               target="_blank"
               rel="noreferrer"
-              aria-label={`先登录 Epic 账号再领取 ${mainTitle}`}
+              aria-label={`已登录 Epic，直接打开结算页领取 ${mainTitle}`}
               className="flex h-[46px] items-center justify-center gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
             >
-              先登录 Epic（登录后自动回下单页）
+              已登录 Epic？直接打开结算页
             </a>
           ) : null}
           {deal.gamePlatform === "prime" ? (
@@ -1089,15 +1089,11 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
           {deal.status === "active" && purchaseMain ? (
             <>
               <p className="text-center text-xs leading-relaxed text-[var(--dim2)]">
-                {mobileDeal
-                  ? deal.epicOffers.length > 1
-                    ? "「去领取」是 Epic 官方下单直达链接：一条链接带上安卓 + iOS 两端；只想领一端用下面两个按钮"
-                    : "「去领取」是 Epic 官方下单直达链接"
-                  : "「去领取」是 Epic 官方下单直达链接：打开即结算页，点「下订单」即领完"}
+                {mobileDeal && deal.epicOffers.length > 1
+                  ? "「去领取」直达 Epic 0 元结算页，一条链接带上安卓 + iOS 两端；只想领一端用下面两个按钮"
+                  : "「去领取」直达 Epic 0 元结算页，点「下订单」即领完"}
               </p>
-              {mobileDeal ? (
-                <p className="text-center text-xs font-medium leading-relaxed text-[var(--warn)]">{EPIC_MOBILE_HOP_NOTE}</p>
-              ) : null}
+              <p className="text-center text-xs font-medium leading-relaxed text-[var(--warn)]">{EPIC_LOGIN_HOP_NOTE}</p>
               {mobileDeal && deal.epicOffers.length > 1 ? (
                 <div className="flex gap-2.5">
                   {deal.epicOffers.map((o) => (
@@ -2429,16 +2425,9 @@ function GamesPage({
         .filter(
           (d) =>
             (d.tags.includes("game") || d.tags.includes("dlc")) &&
-            // "epic" 分栏只放 PC 版 Epic 限免；手游版有自己的 chip，
-            // 并在 全部 / Epic 视图里以「Epic 手游」子区单独出现 —
-            // 同名 PC 版与手游版永远分开，不合并。
-            (plat === "all"
-              ? true
-              : plat === "epic-mobile"
-                ? d.epicMobile
-                : plat === "epic"
-                  ? d.gamePlatform === "epic" && !d.epicMobile
-                  : d.gamePlatform === plat) &&
+            // Epic 手游不再单列分栏：和 PC 版一样进「Epic」/「全部」，
+            // 卡片上仍保留「手游版 安卓/iOS」属性标签以便区分。
+            (plat === "all" ? true : plat === "epic" ? d.gamePlatform === "epic" : d.gamePlatform === plat) &&
             (!hideClaimed || !d.claimed) &&
             (!hideHidden || !d.hidden) &&
             (!onlySaved || d.saved) &&
@@ -2546,13 +2535,8 @@ function GamesPage({
         {plat === "prime" ? <SectionHead no="01" title="Prime 会员游戏" en="INCLUDED WITH PRIME" /> : null}
         {list.length > 0 ? (
           <>
-            {(() => {
-              // Epic 手游单独成区：在 全部 / Epic 视图里排在 PC 条目
-              // 之后、带自己的小节标题；在 Epic 手游 chip 下直接平铺。
-              const splitMobile = plat === "all" || plat === "epic";
-              const mainRows = splitMobile ? list.filter((d) => !d.epicMobile) : list;
-              const mobileRows = splitMobile ? list.filter((d) => d.epicMobile) : [];
-              const row = (d: Deal) => (
+            <div className="flex flex-col gap-[9px]">
+              {list.map((d) => (
                 <SelectableGameRow
                   key={d.id}
                   deal={d}
@@ -2563,19 +2547,8 @@ function GamesPage({
                   onToggle={toggleSelect}
                   onLongPressFire={handleLongPress}
                 />
-              );
-              return (
-                <>
-                  {mainRows.length > 0 ? <div className="flex flex-col gap-[9px]">{mainRows.map(row)}</div> : null}
-                  {mobileRows.length > 0 ? (
-                    <div className={mainRows.length > 0 ? "mt-6" : ""}>
-                      <SectionHead no="手游" title="Epic 手游" en="EPIC MOBILE · 每周限免" />
-                      <div className="flex flex-col gap-[9px]">{mobileRows.map(row)}</div>
-                    </div>
-                  ) : null}
-                </>
-              );
-            })()}
+              ))}
+            </div>
           </>
         ) : (
           <EmptyNote
@@ -5361,20 +5334,26 @@ function claimTargetOf(deal: Deal): ClaimTarget {
   return { key: null, label: "来源平台" };
 }
 
-function claimLinkOf(deal: Deal): { url: string; label: string } | null {
+function claimLinkOf(deal: Deal): { url: string; label: string; directUrl?: string } | null {
   if (deal.claimUrl) {
     // Epic rows' claimUrl IS the official purchase deep link (assembled
-    // server-side from the real namespace/offerId): in a desktop browser
-    // it lands straight on the checkout page. Mobile rows combine
-    // android+iOS in one link — on a phone browser Epic funnels that
-    // link to its app-download page instead (see EPIC_MOBILE_HOP_NOTE).
+    // server-side from the real namespace/offerId). The checkout needs an
+    // Epic session in the SAME browser — otherwise Epic answers
+    // "Account id is missing" or funnels a phone visitor to the PC store
+    // page. So the CTA goes through Epic login with the checkout as its
+    // redirect target; directUrl keeps a bypass for already-signed-in users.
     // GamerPower mobile duplicates the sync mirrored the official offers
-    // onto carry the same purchase link as claimUrl — recognise them by
-    // the link itself plus all-mobile offers, not by bucket.
+    // onto carry the same purchase link — recognise them by the link
+    // itself plus all-mobile offers, not by bucket.
     const purchaseMain = deal.combinedPurchaseUrl != null && deal.claimUrl === deal.combinedPurchaseUrl;
     const mobileOffers = deal.epicOffers.length > 0 && deal.epicOffers.every((o) => o.platform === "android" || o.platform === "ios");
     if (purchaseMain && (deal.gamePlatform === "epic" || mobileOffers)) {
-      return { url: deal.claimUrl, label: (deal.epicMobile || mobileOffers) && deal.epicOffers.length > 1 ? "打开 Epic 下单页（一次领两端）" : "打开 Epic 下单页领取" };
+      const twoEnds = (deal.epicMobile || mobileOffers) && deal.epicOffers.length > 1;
+      return {
+        url: epicLoginUrl(deal.claimUrl),
+        directUrl: deal.claimUrl,
+        label: twoEnds ? "打开 Epic 结算页（一次领两端）" : "打开 Epic 0 元结算页领取",
+      };
     }
     return { url: deal.claimUrl, label: "打开官方领取页" };
   }
@@ -5533,7 +5512,7 @@ function BatchClaimFlow({
         ) : phase === "verifying" ? (
           <section className="mt-4 rounded-[16px] border border-[var(--glass-edge)] bg-[var(--surface)] p-5 text-center shadow-[var(--glass-hi)] backdrop-blur-md" aria-live="polite">
             <p className="font-serif text-[16px] font-bold text-[var(--text)]">正在同步官方游戏库验库…</p>
-            <p className="mx-auto mt-2 max-w-[46ch] text-[13px] leading-[1.8] text-[var(--dim)]">逐款和你绑定的 Epic / Steam / GOG 账号的真实游戏库对账，游戏多时要等一会儿。</p>
+            <p className="mx-auto mt-2 max-w-[46ch] text-[13px] leading-[1.8] text-[var(--dim)]">逐款和你绑定的 Epic / Steam / GOG 账号的真实游戏库对账，库里游戏多时约需半分钟到一分钟，请留在这个页面等结果，不要重复点。</p>
           </section>
         ) : phase === "results" ? (
           <div>
@@ -5609,7 +5588,6 @@ function BatchClaimFlow({
                     <p className="text-xs leading-[1.7] text-[var(--dim)]">
                       这是手游版（{current.mobilePlatforms.map((p) => (p === "android" ? "安卓" : "iOS")).join(" + ")}），和 PC 版是两个独立商品。下单链接一次带上两端 offer；验库只认库里带手游标记的记录，没查到时会让你以 Epic 账户交易页为准。
                     </p>
-                    <p className="mt-1.5 text-xs font-medium leading-[1.7] text-[var(--warn)]">{EPIC_MOBILE_HOP_NOTE}</p>
                   </div>
                 ) : null}
                 {current.regionLocked ? (
@@ -5650,6 +5628,20 @@ function BatchClaimFlow({
                       该条目暂无官方领取链接，请在{target.label}按游戏名搜索领取
                     </span>
                   )}
+                  {link?.directUrl ? (
+                    <>
+                      <a
+                        href={link.directUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`已登录 Epic，直接打开结算页：${dealTitle(current)}`}
+                        className="flex h-[42px] items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-[12.5px] font-medium text-[var(--dim)] backdrop-blur-md"
+                      >
+                        已登录 Epic？直接打开结算页
+                      </a>
+                      <p className="text-center text-[11px] leading-[1.65] text-[var(--warn)]">{EPIC_LOGIN_HOP_NOTE}</p>
+                    </>
+                  ) : null}
                   <div className="flex gap-2.5">
                     <button
                       type="button"

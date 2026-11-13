@@ -23,6 +23,7 @@
 | 9 | **Steam 游戏库封面改竖版** | 库同步原先用 `header.jpg`（460×215 横版横幅），在 3:4 竖版网格里被 `object-cover` 裁成中间一条。改用 Steam 官方 `library_600x900_2x.jpg`（600×900），`listLibrary` 读取时归一化历史横版链接，数据库里 125 条记录全部迁移；4 款官方确无竖版资产的应用回退到设计占位图，ARK 用 1x 竖版。 |
 | 10 | **区服快捷切换 + 全库搜索结果可关注** | 区服切换行从「本体限免」区块内部移到搜索框正下方（任何筛选 chip 下都可见），切区服同时作用于「本体限免」与 `searchAppStore` 的 `country`，即全库检索范围也跟着变。App Store 全库结果每行新增 ☆ 关注：这些结果不是 deal、没有 `dealId` 可写 `marks`，所以把完整条目存本机 `localStorage.fgame-store-watch`（与降价关注同一取舍，换设备不同步但不会串号）；「关注」页新增「关注的应用」区块回看、可取消关注，关注 chip 计数也包含它们。星标按钮在 `<a>` 内用 `preventDefault` 阻止跳转，只切换关注。 |
 | 11 | **搜索框一键清除** | 应用页「搜索应用」与首页「搜索羊毛」两个输入框右侧新增圆形 ✕ 清除按钮（`SearchClearButton`，仅在有输入时渲染，输入框加 `pr-10` 预留空间）。点击后清空关键词并立即把焦点还给输入框，可直接输入开始下一次搜索；应用页清空后「App Store 全库」区块按 `q.length >= 2` 条件自动收起、chip 计数恢复，不会残留上一次的搜索结果。 |
+| 12 | **验库超时修复 + 取消 Epic 手游标签 + Epic 领取直达结算页** | ① `verifyBatchClaim` 结束队列前会重新同步绑定平台的官方库（实测 Epic 771 款约 33s），却没在客户端 `SLOW_ACTIONS` 白名单里，20s 就被 `AbortSignal.timeout` 掐断、报「连接 FGame 服务超时」；把它加入白名单（120s），等待文案也注明约需半分钟到一分钟。② 游戏页删掉 `epic-mobile` 平台 chip 与「Epic 手游」独立小节，手游条目并入「Epic / 全部」，卡片仍保留「手游版 安卓/iOS」属性标签。③ Epic 的 `purchase?offers=…` 结算页要求同一浏览器已登录 Epic，未登录会报 `Account id is missing` 或被导向 PC 商店页；详情页与一键入库队列的主 CTA 改走 `epicgames.com/id/login?redirectUrl=<结算页>`（已登录立即回结算页，未登录登完自动回），并保留「已登录 Epic？直接打开结算页」次要入口与提示文案。 |
 
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
