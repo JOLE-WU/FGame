@@ -1015,6 +1015,15 @@ function buildEpicMobileDeals(
         "1. 点「去领取」打开 Epic 官方下单页（已登录 Epic 账号）\n2. 核对订单金额为 0，点「下订单」完成领取\n3. 领没领到可在 Epic 账户交易页核对（邮件收据可能延迟十几分钟）",
     });
   }
+  // A parsed-but-EMPTY feed is not a successful "no giveaways this week":
+  // it means the snapshot is stale (last week's giveaway is already past
+  // its discountEndDate, so the parser skipped it) or the topic only lists
+  // permanently free titles. Treating it as ok=true used to make
+  // storeEpicMobileDeals run expireMissing with an empty set and silently
+  // wipe every live epic-mobile row — the whole mobile section vanished.
+  // Report "no data" instead: refreshDeals keeps the previous rows and
+  // tries the background fetch, saveEpicMobileSnapshot writes nothing.
+  if (deals.length === 0) return { deals: [], ok: false };
   return { deals, ok: true };
 }
 
@@ -1078,7 +1087,13 @@ async function mirrorEpicMobileOntoGpRows(ctx: Ctx, mobileDeals: UpsertDeal[]): 
  *  fallback): upsert the official rows, expire vanished ones under
  *  their own prefix only, then mirror onto GamerPower duplicates. */
 async function storeEpicMobileDeals(ctx: Ctx, deals: UpsertDeal[]): Promise<void> {
-  if (deals.length > 0) await upsertDeals(ctx, deals);
+  // Guard against an empty result ever clearing the section. An empty set
+  // here almost always means the Cloudflare-gated feed was unreachable or
+  // the browser snapshot is stale, NOT that Epic pulled every giveaway —
+  // expireMissing with an empty set would mark all live mobile deals
+  // expired. Keep the last good rows until a fetch with real offers lands.
+  if (deals.length === 0) return;
+  await upsertDeals(ctx, deals);
   await expireMissing(ctx, ["epic-mobile-"], new Set(deals.map((d) => d.externalId)));
   await mirrorEpicMobileOntoGpRows(ctx, deals);
 }

@@ -18,5 +18,13 @@ while true; do
     echo "[watchdog] $(date '+%F %T') iap scan loop down, restarting" >> /tmp/fgame-watchdog.log
     (setsid bash /workspace/FGame/scripts/iap-scan-loop.sh >> /tmp/fgame-iap.log 2>&1 &)
   fi
+  # Epic mobile discover snapshots are fetched through Chromium (the API
+  # 403s server-side). If this loop dies the snapshots silently age out:
+  # the server then reads last week's stale JSON, parses zero live
+  # giveaways, and the whole Epic mobile section disappears. Keep it alive.
+  if ! pgrep -f "epic-discover-cron.sh" > /dev/null 2>&1; then
+    echo "[watchdog] $(date '+%F %T') epic discover snapshot loop down, restarting" >> /tmp/fgame-watchdog.log
+    (setsid bash /workspace/FGame/scripts/epic-discover-cron.sh >> /tmp/epic-discover.log 2>&1 &)
+  fi
   sleep 30
 done

@@ -11,6 +11,8 @@ server/dist/
 data/iap-pool.json
 data/iap-price-history.json
 data/iap-scan-state.json
+# Epic 手游 discover 快照：由 Chromium 每 6 小时重抓，属运行时数据
+data/epic-discover/
 *.db
 *.db-shm
 *.db-wal
