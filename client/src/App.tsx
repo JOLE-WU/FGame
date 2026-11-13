@@ -747,19 +747,22 @@ function EmptyNote({ title, sub }: { title: string; sub?: string }) {
 
 const enrichAttempted = new Set<number>();
 
-// Epic offers are claimed on the web checkout
-// (`store.epicgames.com/purchase?offers=…`) — the same link the "one-tap
-// claim" posts use, no Epic app needed. But the checkout REQUIRES an Epic
-// session in the same browser: without one it answers "Account id is
-// missing" / funnels a phone visitor to the PC store page. So the CTA goes
-// through Epic's login with the checkout as redirectUrl: signed-in users
-// land on the 0-yuan checkout immediately, others return to it after login.
+// Epic 手游 / PC 限免都在同一个网页结算页下单：
+//   https://store.epicgames.com/purchase?offers=1-<namespace>-<offerId>
+// 小黑盒等「一键领取」用的就是这个链接本身（安卓、iOS 各一个 offer，
+// 或合并成一条）。结算页要求「同一个浏览器里已经登录 Epic 账号」，
+// 但登录必须是独立的第 1 步：登录态留在浏览器，再点结算页下 0 元订单。
+// 把结算页塞进 /id/login?redirectUrl= 在 iOS WKWebView / 系统浏览器里
+// 登录后不会回跳到结算页，反而落到 Epic 商店首页的 PC 游戏列表 ——
+// 这正是「点进去还是 PC 端游戏」的原因。所以主按钮直接给结算页，
+// 另给一个不带回跳的登录入口让登录态留在浏览器。
+const EPIC_SIGNIN_URL = "https://www.epicgames.com/id/login/guided?lang=zh-CN";
 const EPIC_LOGIN_HOP_NOTE =
-  "Epic 的 0 元结算页要求在同一个浏览器里登录 Epic 账号；没登录时会被导向 PC 商店页或报错。「打开结算页」按钮会先带你登录，登录完自动回到结算页，再点「下订单」即领完。";
+  "先点「① 登录 Epic」在浏览器里登录（登录态会留住），再点「打开 0 元结算页」；核对金额为 0 后点「下订单」，页面变黑就是领成功了。国区暂未上架 Epic 手游 App，也能先在网页领取，权益进 Epic 账号后用安卓设备或外区 iOS 下载。";
 
-/** Epic login that returns to `target` once signed in. */
-function epicLoginUrl(target: string): string {
-  return `https://www.epicgames.com/id/login?lang=zh-CN&redirectUrl=${encodeURIComponent(target)}`;
+/** Epic 登录入口（不带 redirectUrl，登录态留在浏览器供结算页使用）。 */
+function epicSignInUrl(): string {
+  return EPIC_SIGNIN_URL;
 }
 
 function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Deal; now: number; onClose: () => void; authToken?: string; onQueueClaim?: (d: Deal) => void }) {
@@ -1059,7 +1062,7 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
             <span className="rounded-[14px] bg-[var(--surface2)] px-4 py-3.5 text-center text-[15px] font-medium text-[var(--dim)]">未开始</span>
           ) : deal.claimUrl ? (
             <a
-              href={purchaseMain ? epicLoginUrl(deal.claimUrl) : deal.claimUrl}
+              href={deal.claimUrl}
               target="_blank"
               rel="noreferrer"
               aria-label={`去领取 ${mainTitle}`}
@@ -1074,13 +1077,13 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
           )}
           {purchaseMain && deal.claimUrl ? (
             <a
-              href={deal.claimUrl}
+              href={epicSignInUrl()}
               target="_blank"
               rel="noreferrer"
-              aria-label={`已登录 Epic，直接打开结算页领取 ${mainTitle}`}
+              aria-label="先登录 Epic 账号，登录态留在浏览器"
               className="flex h-[46px] items-center justify-center gap-2 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
             >
-              已登录 Epic？直接打开结算页
+              ① 登录 Epic（登录后回来点「去领取」）
             </a>
           ) : null}
           {deal.gamePlatform === "prime" ? (
@@ -1090,8 +1093,8 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
             <>
               <p className="text-center text-xs leading-relaxed text-[var(--dim2)]">
                 {mobileDeal && deal.epicOffers.length > 1
-                  ? "「去领取」直达 Epic 0 元结算页，一条链接带上安卓 + iOS 两端；只想领一端用下面两个按钮"
-                  : "「去领取」直达 Epic 0 元结算页，点「下订单」即领完"}
+                  ? "「去领取」是 Epic 官方 0 元结算页，一条链接带上安卓 + iOS 两端；只想领一端用下面两个按钮"
+                  : "「去领取」是 Epic 官方 0 元结算页，核对金额为 0 后点「下订单」即领完"}
               </p>
               <p className="text-center text-xs font-medium leading-relaxed text-[var(--warn)]">{EPIC_LOGIN_HOP_NOTE}</p>
               {mobileDeal && deal.epicOffers.length > 1 ? (
@@ -5334,24 +5337,23 @@ function claimTargetOf(deal: Deal): ClaimTarget {
   return { key: null, label: "来源平台" };
 }
 
-function claimLinkOf(deal: Deal): { url: string; label: string; directUrl?: string } | null {
+function claimLinkOf(deal: Deal): { url: string; label: string; signInUrl?: string } | null {
   if (deal.claimUrl) {
-    // Epic rows' claimUrl IS the official purchase deep link (assembled
-    // server-side from the real namespace/offerId). The checkout needs an
-    // Epic session in the SAME browser — otherwise Epic answers
-    // "Account id is missing" or funnels a phone visitor to the PC store
-    // page. So the CTA goes through Epic login with the checkout as its
-    // redirect target; directUrl keeps a bypass for already-signed-in users.
-    // GamerPower mobile duplicates the sync mirrored the official offers
-    // onto carry the same purchase link — recognise them by the link
-    // itself plus all-mobile offers, not by bucket.
+    // claimUrl 本身就是 Epic 官方 0 元结算页（小黑盒「一键领取」用的
+    // 链接）。结算页要求同一个浏览器里已登录 Epic，但登录是独立的
+    // 第 1 步：signInUrl 打开不带 redirectUrl 的登录页，登录态留在
+    // 浏览器，用户回来点主按钮即可直接结算。绝不要把结算页塞进
+    // /id/login?redirectUrl= —— 移动端登录后不会回跳，会落到 PC
+    // 商店首页的游戏列表（「点进去还是 PC 端游戏」）。
+    // GamerPower 手游重复条目由同步镜像了官方 offers，靠「链接本身
+    // + 全移动 offers」识别，而不是靠分类。
     const purchaseMain = deal.combinedPurchaseUrl != null && deal.claimUrl === deal.combinedPurchaseUrl;
     const mobileOffers = deal.epicOffers.length > 0 && deal.epicOffers.every((o) => o.platform === "android" || o.platform === "ios");
     if (purchaseMain && (deal.gamePlatform === "epic" || mobileOffers)) {
       const twoEnds = (deal.epicMobile || mobileOffers) && deal.epicOffers.length > 1;
       return {
-        url: epicLoginUrl(deal.claimUrl),
-        directUrl: deal.claimUrl,
+        url: deal.claimUrl,
+        signInUrl: epicSignInUrl(),
         label: twoEnds ? "打开 Epic 结算页（一次领两端）" : "打开 Epic 0 元结算页领取",
       };
     }
@@ -5628,16 +5630,16 @@ function BatchClaimFlow({
                       该条目暂无官方领取链接，请在{target.label}按游戏名搜索领取
                     </span>
                   )}
-                  {link?.directUrl ? (
+                  {link?.signInUrl ? (
                     <>
                       <a
-                        href={link.directUrl}
+                        href={link.signInUrl}
                         target="_blank"
                         rel="noreferrer"
-                        aria-label={`已登录 Epic，直接打开结算页：${dealTitle(current)}`}
+                        aria-label="先登录 Epic 账号，登录态留在浏览器"
                         className="flex h-[42px] items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-[12.5px] font-medium text-[var(--dim)] backdrop-blur-md"
                       >
-                        已登录 Epic？直接打开结算页
+                        ① 登录 Epic（登录后回来点上方结算页）
                       </a>
                       <p className="text-center text-[11px] leading-[1.65] text-[var(--warn)]">{EPIC_LOGIN_HOP_NOTE}</p>
                     </>

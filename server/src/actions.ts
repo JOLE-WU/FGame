@@ -4893,6 +4893,28 @@ export const Actions = {
         .from(schema.deals)
         .where(inArray(schema.deals.status, ["active", "upcoming"]))
         .orderBy(desc(schema.deals.publishedAt));
+      // GamerPower 会把 Epic 官方当周免费游戏重复收录成
+      // "… (Epic Games) Giveaway"，并在 platform 里一并带上 Android/iOS，
+      // 于是被前端标成「手游」；但它的 open_giveaway_url 只是跳到 Epic
+      // PC 商店页（不是 0 元结算页），又因为标题同名，用户领了 PC 版
+      // 就会被自动标成「已领取」——看起来就像「没领手游却显示已领」。
+      // 官方 epic-* 条目本身信息更全（真实 offerId + purchase 结算页），
+      // 所以把这类与在架官方 PC 条目同名的 GP 重复赠礼从列表里去掉，
+      // 只保留干净的官方条目，避免误导成手游限免。
+      const officialEpicTitles = new Set(
+        rows
+          .filter((r) => r.externalId.startsWith("epic-") && !r.externalId.startsWith("epic-mobile-") && r.status === "active")
+          .map((r) => normName(baseTitle(r.title)))
+          .filter((k) => k.length > 0),
+      );
+      const visibleRows =
+        officialEpicTitles.size === 0
+          ? rows
+          : rows.filter((r) => {
+              if (!r.externalId.startsWith("gp-")) return true;
+              if (!/epic games/i.test(r.platform) && !/\(epic games\)/i.test(r.title)) return true;
+              return !officialEpicTitles.has(normName(baseTitle(r.title)));
+            });
       const markRows = await db.select().from(schema.marks).where(eq(schema.marks.userId, uid));
       const savedIds = new Set(markRows.filter((m) => m.kind === "saved").map((m) => m.dealId));
       const claimedIds = new Set(markRows.filter((m) => m.kind === "claimed").map((m) => m.dealId));
@@ -4907,18 +4929,37 @@ export const Actions = {
       // carries the same normalized title — i.e. the game verifiably sits
       // in the bound platform account (or was added here before).
       const libItemRows = await db
-        .select({ platform: schema.libraryItems.platform, title: schema.libraryItems.title })
+        .select({ platform: schema.libraryItems.platform, title: schema.libraryItems.title, devicePlatforms: schema.libraryItems.devicePlatforms })
         .from(schema.libraryItems)
         .where(eq(schema.libraryItems.userId, uid));
+      // Two views of the same library, split by device entitlement. Epic
+      // syncs a PC copy of a free game (devicePlatforms "pc") and, when
+      // the mobile giveaway is claimed, a mobile-marked row ("mobile").
+      // A MOBILE deal must only be lit up by a mobile-marked row — owning
+      // the PC free game of the same title must NOT mark the mobile
+      // giveaway 已领取. This mirrors verifyBatchClaim's mobile rule.
       const libTitles = new Map<string, Set<string>>();
+      const libMobileTitles = new Map<string, Set<string>>();
+      const addKeys = (map: Map<string, Set<string>>, platform: string, title: string) => {
+        const set = map.get(platform) ?? new Set<string>();
+        set.add(normName(title));
+        set.add(normName(baseTitle(title)));
+        map.set(platform, set);
+      };
       for (const it of libItemRows) {
-        const set = libTitles.get(it.platform) ?? new Set<string>();
-        set.add(normName(it.title));
-        set.add(normName(baseTitle(it.title)));
-        libTitles.set(it.platform, set);
+        addKeys(libTitles, it.platform, it.title);
+        const devs = (it.devicePlatforms ?? "").split(",").map((d) => d.trim());
+        if (devs.includes("mobile")) addKeys(libMobileTitles, it.platform, it.title);
       }
+      const isMobileDeal = (r: (typeof rows)[number]): boolean => {
+        if (r.externalId.startsWith("epic-mobile-")) return true;
+        if (/\(mobile\)/i.test(r.title) || /手游版|手游商城/i.test(r.title + " " + (r.titleZh ?? "") + " " + r.platform)) return true;
+        const offers = parseEpicOffers(r.epicOffers);
+        if (offers.length > 0 && offers.every((o) => o.platform === "android" || o.platform === "ios")) return true;
+        return false;
+      };
       const inLibraryIds = new Set<number>();
-      for (const r of rows) {
+      for (const r of visibleRows) {
         const tags = r.tags.split(",");
         if (!tags.includes("game") && !tags.includes("dlc")) continue;
         const group = libraryGroupOfDeal(r);
@@ -4930,14 +4971,14 @@ export const Actions = {
         // Prime channels are matched too (amazon / legacy): a Prime game
         // already sitting in the account's library must get the same
         // 已在库 badge the Epic/Steam/GOG ones get.
-        const set = libTitles.get(group);
+        const set = isMobileDeal(r) ? libMobileTitles.get(group) : libTitles.get(group);
         if (!set) continue;
         const keys = [normName(baseTitle(r.title)), ...(r.titleZh ? [normName(baseTitle(r.titleZh))] : [])];
         if (keys.some((k) => k.length > 0 && set.has(k))) inLibraryIds.add(r.id);
       }
-      const deals = rows.map((r) => toDeal(r, savedIds, claimedIds, hiddenIds, itunesMatchedDealIds, inLibraryIds));
+      const deals = visibleRows.map((r) => toDeal(r, savedIds, claimedIds, hiddenIds, itunesMatchedDealIds, inLibraryIds));
       const nowMs = Date.now();
-      const timed = rows.filter((r) => r.endAt && r.status === "active" && r.endAt.getTime() > nowMs);
+      const timed = visibleRows.filter((r) => r.endAt && r.status === "active" && r.endAt.getTime() > nowMs);
       const nextExpiry = timed.length
         ? timed.reduce((a, b) => ((a.endAt as Date) < (b.endAt as Date) ? a : b))
         : null;
@@ -4945,12 +4986,12 @@ export const Actions = {
         deals,
         lastSyncedAt: metaRows[0]?.value ?? null,
         stats: {
-          activeCount: rows.filter((r) => r.status === "active").length,
-          totalWorthCents: rows
+          activeCount: visibleRows.filter((r) => r.status === "active").length,
+          totalWorthCents: visibleRows
             .filter((r) => r.status === "active")
             .reduce((sum, r) => sum + (r.worthCents ?? 0), 0),
           nextExpiryAt: nextExpiry?.endAt ? nextExpiry.endAt.toISOString() : null,
-          epicFreeCount: rows.filter((r) => r.externalId.startsWith("epic-") && r.status === "active").length,
+          epicFreeCount: visibleRows.filter((r) => r.externalId.startsWith("epic-") && r.status === "active").length,
         },
       };
     },
