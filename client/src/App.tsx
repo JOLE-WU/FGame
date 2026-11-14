@@ -12,6 +12,7 @@ type ReactNode,
 type RefObject,
 type TouchEvent as ReactTouchEvent,
 } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SafeAreaTopScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
@@ -486,7 +487,11 @@ const MiniRow = memo(function MiniRow({
           onOpen(deal);
         }
       }}
-      className={`flex cursor-pointer items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] shadow-[var(--glass-hi)] backdrop-blur-md transition-colors ${deal.hidden ? "opacity-60" : ""}`}
+      className={`flex cursor-pointer items-center gap-3 rounded-[14px] border p-[9px] shadow-[var(--glass-hi)] backdrop-blur-md transition-colors ${
+        deal.claimed
+          ? "border-[var(--claimed-card-line)] bg-[var(--claimed-card-bg)]"
+          : "border-[var(--border)] bg-[var(--surface)]"
+      } ${deal.hidden ? "opacity-60" : ""}`}
     >
       <CoverTile deal={deal} size={72} />
       <div className="min-w-0 flex-1">
@@ -1367,6 +1372,51 @@ function TodayPage(p: TodayProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
 
+  // 报头「羊毛日报」支持双击改字：标题只存本机，不跟账号走。
+  // 移动端 WKWebView 不保证派发 dblclick，所以另做一次轻量的双 tap 判定。
+  const MASTHEAD_DEFAULT = "羊毛日报";
+  const [mastheadTitle, setMastheadTitle] = useState<string>(() => {
+    try { return localStorage.getItem("fgame-masthead-title") || MASTHEAD_DEFAULT; }
+    catch { return MASTHEAD_DEFAULT; }
+  });
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const titleCancelRef = useRef(false);
+  const lastTitleTapRef = useRef(0);
+  const startEditTitle = () => {
+    titleCancelRef.current = false;
+    setTitleDraft(mastheadTitle);
+    setEditingTitle(true);
+  };
+  const commitTitle = () => {
+    if (titleCancelRef.current) {
+      titleCancelRef.current = false;
+      setEditingTitle(false);
+      return;
+    }
+    const next = titleDraft.trim().slice(0, 12) || MASTHEAD_DEFAULT;
+    setMastheadTitle(next);
+    try { localStorage.setItem("fgame-masthead-title", next); } catch { /* 隐私模式忽略 */ }
+    setEditingTitle(false);
+  };
+  useEffect(() => {
+    if (!editingTitle) return;
+    const el = titleInputRef.current;
+    if (!el) return;
+    el.focus();
+    el.select();
+  }, [editingTitle]);
+  const onTitleDoubleTap = () => {
+    const now = Date.now();
+    if (now - lastTitleTapRef.current < 340) {
+      lastTitleTapRef.current = 0;
+      startEditTitle();
+    } else {
+      lastTitleTapRef.current = now;
+    }
+  };
+
   const refresh = useMutation({
     mutationFn: () => api.refreshDeals({}),
     onSuccess: (r) => {
@@ -1485,10 +1535,37 @@ function TodayPage(p: TodayProps) {
         </div>
         <div className="flex items-end justify-between gap-2.5">
           <div className="flex flex-wrap items-baseline gap-[9px]">
-            <h1 className="grad-text relative font-serif text-[34px] font-semibold leading-none tracking-[0.04em]">
-              羊毛日报
-              <span aria-hidden="true" className="absolute -right-[15px] top-[2px] h-[9px] w-[9px] rounded-full bg-[var(--accent)] shadow-[0_0_12px_var(--accent)]" />
-            </h1>
+            {editingTitle ? (
+              <input
+                ref={titleInputRef}
+                type="text"
+                value={titleDraft}
+                maxLength={12}
+                aria-label="编辑日报标题"
+                onChange={(e) => setTitleDraft(e.target.value)}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    commitTitle();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    titleCancelRef.current = true;
+                    setEditingTitle(false);
+                  }
+                }}
+                className="grad-text w-[min(58vw,220px)] border-b border-[var(--accent)] bg-transparent font-serif text-[34px] font-semibold leading-none tracking-[0.04em] outline-none"
+              />
+            ) : (
+              <h1
+                onDoubleClick={startEditTitle}
+                onTouchEnd={onTitleDoubleTap}
+                title="双击编辑标题"
+                className="grad-text cursor-text select-none font-serif text-[34px] font-semibold leading-none tracking-[0.04em] [-webkit-touch-callout:none]"
+              >
+                {mastheadTitle}
+              </h1>
+            )}
             <span className="whitespace-nowrap font-mono text-[9px] font-semibold tracking-[0.2em] text-[var(--dim2)]">FREE GAME DAILY</span>
           </div>
           <div className="relative flex gap-2 pb-[3px]">
@@ -1998,14 +2075,212 @@ function FilterRow({ label, children }: { label: string; children: ReactNode }) 
   );
 }
 
-function RankRow({ app }: { app: RankingApp }) {
-  return (
-    <a
-      href={app.storeUrl ?? "#"}
-      target="_blank"
-      rel="noreferrer"
-      className="flex items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70"
+/** 榜单条目点进详情页时附带的上下文（区服 / 榜单），详情页拿它做说明。 */
+type RankingMeta = {
+  cc: string;
+  regionLabel: string;
+  boardLabel: string;
+  chartLabel: string;
+};
+
+/** 榜单条目落进本地「我关注的」时，补齐 StoreApp 需要的字段。 */
+function rankingToStoreApp(a: RankingApp): StoreApp {
+  const priceNum = Number(String(a.price ?? "").replace(/[^\d.]/g, "")) || 0;
+  return {
+    trackId: a.trackId,
+    name: a.name,
+    iconUrl: a.iconUrl,
+    storeUrl: a.storeUrl,
+    sellerName: a.sellerName,
+    genre: a.genre,
+    price: priceNum,
+    formattedPrice: a.price || "免费",
+    currency: a.currency,
+    rating: null,
+    ratingCount: null,
+    collected: false,
+    tag: null,
+    dealId: null,
+  };
+}
+
+/** 详情页右滑返回：与 DealDetail 同一套手感，独立实例互不干扰。 */
+function useRankingSwipeBack(onClose: () => void) {
+  const start = useRef<{ x: number; y: number; ok: boolean } | null>(null);
+  const dxRef = useRef(0);
+  const [x, setX] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const finish = (commit: boolean) => {
+    const s = start.current;
+    const dx = dxRef.current;
+    start.current = null;
+    dxRef.current = 0;
+    setDragging(false);
+    setX(0);
+    if (commit && s?.ok && dx > 96) onClose();
+  };
+  return {
+    handlers: {
+      onTouchStart: (e: ReactTouchEvent<HTMLDivElement>) => {
+        const t = e.touches[0];
+        if (!t || e.touches.length !== 1) return;
+        const edge = Math.min(120, window.innerWidth * 0.32);
+        if (t.clientX > edge || (e.target as HTMLElement | null)?.closest?.(".overflow-x-auto")) return;
+        start.current = { x: t.clientX, y: t.clientY, ok: true };
+        dxRef.current = 0;
+        setDragging(true);
+      },
+      onTouchMove: (e: ReactTouchEvent<HTMLDivElement>) => {
+        const s = start.current;
+        const t = e.touches[0];
+        if (!s?.ok || !t) return;
+        const dx = t.clientX - s.x;
+        const dy = t.clientY - s.y;
+        if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 12) {
+          s.ok = false;
+          dxRef.current = 0;
+          setX(0);
+          return;
+        }
+        const next = dx > 0 ? Math.min(dx, 320) : 0;
+        dxRef.current = next;
+        setX(next);
+      },
+      onTouchEnd: () => finish(true),
+      onTouchCancel: () => finish(false),
+    },
+    style: {
+      transform: x > 0 ? `translateX(${x}px)` : undefined,
+      transition: dragging ? "none" : "transform 180ms cubic-bezier(.2,.8,.2,1)",
+    } as CSSProperties,
+  };
+}
+
+/**
+ * 榜单条目详情：先落在应用内，再让用户决定去 App Store 或加关注。
+ * 用 portal 挂到 body，避免被下拉刷新给 <main> 加的 transform 困住。
+ */
+function RankingDetail({
+  app,
+  meta,
+  watched,
+  onToggleWatch,
+  onClose,
+}: {
+  app: RankingApp;
+  meta: RankingMeta;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const release = app.releaseDate ? String(app.releaseDate).slice(0, 10) : "";
+  const rows: [string, string][] = [
+    ["当前排名", `# ${app.rank}`],
+    ["区服", `${meta.regionLabel} · ${meta.cc.toUpperCase()}`],
+    ["榜单", `${meta.chartLabel} · ${meta.boardLabel}`],
+    ["类别", app.genre || "—"],
+    ["价格", app.price || "免费"],
+  ];
+  if (release) rows.push(["上架日期", release]);
+
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`榜单详情：${app.name}`}
+      data-ranking-detail
+      {...swipe.handlers}
+      style={swipe.style}
     >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回排行榜"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">APP STORE · RANKING</span>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
+        <div className="flex items-center gap-4">
+          {app.iconUrl ? (
+            <img src={app.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
+          ) : (
+            <div className="grid h-[92px] w-[92px] flex-none place-items-center rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(app.name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">NO. {app.rank}</div>
+            <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
+            <p className="mt-1 truncate text-[12px] text-[var(--dim)]">{app.sellerName || "App Store"}</p>
+          </div>
+        </div>
+
+        <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+              <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
+          数据来自 Apple 官方 App Store 榜单，每 10 分钟更新。榜单条目不是本站收录的限免信息，点下方按钮前往该区商店查看完整介绍与下载。
+        </p>
+
+        <div className="mt-6 flex gap-2.5">
+          <a
+            href={app.storeUrl ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80"
+          >
+            在 App Store 打开 ↗
+          </a>
+          <button
+            type="button"
+            onClick={onToggleWatch}
+            aria-pressed={watched}
+            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
+              watched
+                ? "border-transparent bg-grad text-[var(--accent-ink)]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+            }`}
+          >
+            {watched ? "★ 已关注" : "☆ 加关注"}
+          </button>
+        </div>
+        {watched ? (
+          <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function RankRow({ app, onOpen }: { app: RankingApp; onOpen?: (app: RankingApp) => void }) {
+  const inner = (
+    <>
       <span className="w-6 flex-none text-center font-mono text-[13px] font-black text-[var(--dim2)]">{app.rank}</span>
       {app.iconUrl ? (
         <img src={app.iconUrl} alt="" loading="lazy" className="h-12 w-12 flex-none rounded-[12px] bg-[var(--surface2)] object-cover" />
@@ -2018,13 +2293,26 @@ function RankRow({ app }: { app: RankingApp }) {
       </div>
       <div className="flex-none text-right">
         <div className="text-[11px] font-bold text-[var(--accent)]">{app.price || "免费"}</div>
-        <div className="font-mono text-[9px] text-[var(--dim2)]">商店 ↗</div>
+        <div className="font-mono text-[9px] text-[var(--dim2)]">{onOpen ? "详情 →" : "商店 ↗"}</div>
       </div>
+    </>
+  );
+  const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 text-left shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70";
+  if (onOpen) {
+    return (
+      <button type="button" data-rank-row onClick={() => onOpen(app)} aria-label={`查看榜单详情：${app.name}`} className={cls}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <a href={app.storeUrl ?? "#"} target="_blank" rel="noreferrer" data-rank-row className={cls}>
+      {inner}
     </a>
   );
 }
 
-function RankingBoard({ initialRegion, tabs }: { initialRegion: string; tabs?: ReactNode }) {
+function RankingBoard({ initialRegion, tabs, onOpen }: { initialRegion: string; tabs?: ReactNode; onOpen?: (app: RankingApp, meta: RankingMeta) => void }) {
   const [cc, setCc] = useState(() => (initialRegion === "all" ? "cn" : initialRegion));
   const [kind, setKind] = useState<"apps" | "games">("apps");
   const [chart, setChart] = useState<"free" | "paid">("free");
@@ -2044,6 +2332,12 @@ function RankingBoard({ initialRegion, tabs }: { initialRegion: string; tabs?: R
     staleTime: 10 * 60_000,
   });
   const apps = query.data?.apps ?? [];
+  const meta: RankingMeta = {
+    cc,
+    regionLabel,
+    boardLabel: kind === "games" ? `${genreLabel}榜` : "App 总榜",
+    chartLabel: chart === "free" ? "免费榜" : "付费榜",
+  };
   return (
     <div className="mt-5 pb-2" data-board="ranking">
       <SectionHead
@@ -2053,7 +2347,7 @@ function RankingBoard({ initialRegion, tabs }: { initialRegion: string; tabs?: R
       />
       {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点击条目打开该区商店页
+        Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点条目看详情，详情页内可去商店或加关注
       </p>
       <FilterRow label="区服">
         {RANK_REGIONS.map((r) => (
@@ -2083,7 +2377,9 @@ function RankingBoard({ initialRegion, tabs }: { initialRegion: string; tabs?: R
         <EmptyNote title="这个组合暂时没有数据" sub="换个区服、免费/付费，或换一个游戏种类看看。" />
       ) : (
         <div className="mt-3 flex flex-col gap-[9px]">
-          {apps.map((a) => <RankRow key={`${a.trackId}-${a.rank}`} app={a} />)}
+          {apps.map((a) => (
+            <RankRow key={`${a.trackId}-${a.rank}`} app={a} onOpen={onOpen ? (x) => onOpen(x, meta) : undefined} />
+          ))}
         </div>
       )}
     </div>
@@ -2195,6 +2491,8 @@ function AppsPage({
 }) {
   const [chip, setChip] = useState<"all" | "free" | "iap" | "drop" | "watch">("all");
   const [subTab, setSubTab] = useState<AppSubTab>("free");
+  // 排行榜条目先落在应用内详情页，由详情页再决定去商店或加关注。
+  const [detailRank, setDetailRank] = useState<{ app: RankingApp; meta: RankingMeta } | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -2419,12 +2717,21 @@ function AppsPage({
 
   return (
     <div>
+      {detailRank ? (
+        <RankingDetail
+          app={detailRank.app}
+          meta={detailRank.meta}
+          watched={storeWatchIds.has(detailRank.app.trackId)}
+          onToggleWatch={() => toggleStoreWatch(rankingToStoreApp(detailRank.app))}
+          onClose={() => setDetailRank(null)}
+        />
+      ) : null}
       <div className="flex items-baseline gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
       </div>
       {subTab === "ranking" ? (
-        <RankingBoard initialRegion={region} tabs={subTabsRow} />
+        <RankingBoard initialRegion={region} tabs={subTabsRow} onOpen={(app, meta) => setDetailRank({ app, meta })} />
       ) : subTab === "arcade" ? (
         <ArcadeBoard tabs={subTabsRow} />
       ) : (

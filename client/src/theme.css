@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap');
 @import "tailwindcss";
 @import "tailwindcss-safe-area";
 
@@ -27,10 +27,10 @@
   --text-2xl--line-height: 32px;
   --text-3xl: 30px;
   --text-3xl--line-height: 36px;
-  /* Only the display / numeric slots get the editorial serif.
-     Body copy keeps the original Outfit (dark) and Nunito (light). */
-  --font-serif: "Instrument Serif", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
-  --font-num: "Instrument Serif", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+  /* Display / numeric slots: back to the pre-1.0.12 faces (Outfit on dark,
+     Baloo 2 on light, overridden below). Body copy never changed. */
+  --font-serif: "Outfit", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-num: "Outfit", "Noto Sans SC", sans-serif;
   --font-mono: "IBM Plex Mono", "Noto Sans SC", monospace;
   /* bg-grad used to be a cyan→violet gradient. It is now a FLAT fill;
      each theme overrides it below with its own solid accent. */
@@ -69,6 +69,9 @@
   /* 已领取 / 本体限免 */
   --free-bg: rgba(87, 217, 155, 0.13);
   --free-ink: #57d99b;
+  /* 已领取卡片：只比背景亮一点点的绿调填色，不用高饱和 */
+  --claimed-card-bg: rgba(87, 217, 155, 0.10);
+  --claimed-card-line: rgba(87, 217, 155, 0.28);
   /* iOS 内购限免 — 与本体限免区分 */
   --iap-bg: rgba(179, 154, 255, 0.13);
   --iap-ink: #b39aff;
@@ -119,6 +122,8 @@
   --warn-bg: rgba(191, 69, 44, 0.08);
   --free-bg: #eef6f1;
   --free-ink: #1d7a4c;
+  --claimed-card-bg: #eaf5ee;
+  --claimed-card-line: rgba(29, 122, 76, 0.22);
   --iap-bg: #f0f0f7;
   --iap-ink: #4c4c86;
   --logo-plate: #f7f7f8;
@@ -130,6 +135,9 @@
   --aurora-bg: linear-gradient(180deg, #ffffff 0%, #fbfbfc 100%);
   --aurora-bg-soft: linear-gradient(180deg, #ffffff 0%, #fbfbfc 100%);
   --radius: 22px;
+  /* 浅色沿用上一版 SOFT CREAM 的圆润标题/数字字体 */
+  --font-serif: "Baloo 2", "Nunito", "Noto Sans SC", "PingFang SC", sans-serif;
+  --font-num: "Baloo 2", "Nunito", "Noto Sans SC", sans-serif;
 }
 
 /* ------------------------------------------------------------
