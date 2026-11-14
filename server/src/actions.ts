@@ -484,6 +484,22 @@ function needsTranslation(s: string | null | undefined): boolean {
   return chineseRatio(s) < 0.35;
 }
 
+/**
+ * App Store 各区服的介绍是否需要中文译文。中文（含繁体）保留原文，其余
+ * 语言都要翻译。不能沿用 needsTranslation：它要求「有连续 3 个拉丁字母」，
+ * 而日文/韩文几乎没有拉丁字母；且日文汉字落在 \u4e00-\u9fff，会被
+ * chineseRatio 误判成中文，导致日区详情页拿不到译文。
+ */
+function needsChineseTranslation(s: string | null | undefined): boolean {
+  if (!s || !s.trim()) return false;
+  // 假名 / 谚文 / 西里尔 / 泰文：明确不是中文，优先判定。
+  if (/[\u3040-\u30ff\uac00-\ud7af\u0400-\u04ff\u0e00-\u0e7f]/.test(s)) return true;
+  const letters = s.replace(/[^A-Za-z\u4e00-\u9fff]/g, "");
+  if (!letters) return false;
+  const zh = (letters.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  return zh / letters.length < 0.6;
+}
+
 const translationSchema = z.object({
   items: z.array(
     z.object({
@@ -4791,6 +4807,121 @@ const arcadeGameSchema = z.object({
   arcadeKind: z.string(),
 });
 
+  /* ---------------------------------------------------------------- *
+   * 中文介绍：优先取该 App 在国区 App Store 的官方中文文案；没有本地化的
+   * 再走有道演示接口分段机翻。独立服务没有 LLM 推理通道（ctx.inference
+   * 直接抛错），所以这里完全不依赖它。译文落 meta 表，重启后不丢。
+   * ---------------------------------------------------------------- */
+type DescZhSource = "cn-store" | "machine";
+type DescZhCache = {
+  at: number;
+  src: string;
+  zh: string;
+  notesZh: string | null;
+  source: DescZhSource | null;
+  failed?: boolean;
+};
+const APP_DESC_ZH_RETRY_MS = 10 * 60_000;
+const appDescZhPending = new Set<string>();
+
+/** 源文案指纹：官方介绍改版后让旧译文自动失效。 */
+function textFingerprint(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return `${(h >>> 0).toString(36)}:${s.length}`;
+}
+
+function hasChinese(s: string | null | undefined): boolean {
+  if (!s) return false;
+  const n = (s.match(/[\u4e00-\u9fff]/g) ?? []).length;
+  return n >= 8 && n / s.length > 0.12;
+}
+
+/** 有道演示翻译接口：单次上限约 1000 字符，失败返回 null 由上层降级。 */
+async function youdaoTranslate(text: string): Promise<string | null> {
+  const u = `https://aidemo.youdao.com/trans?q=${encodeURIComponent(text)}&from=Auto&to=zh-CHS`;
+  try {
+    const res = await fetch(u, {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const d = (await res.json()) as { errorCode?: number | string; translation?: unknown };
+    // 有道有时把 errorCode 以字符串 "0" 返回，必须按数值比较。
+    if (!Array.isArray(d.translation)) return null;
+    if (d.errorCode != null && Number(d.errorCode) !== 0) return null;
+    const out = d.translation.filter((x): x is string => typeof x === "string").join("\n").trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 按段落切成 <900 字符的块并发翻译，再按原顺序拼回，保留段落结构。 */
+async function machineTranslate(text: string): Promise<string | null> {
+  const MAX = 850;
+  const chunks: string[] = [];
+  let buf = "";
+  const flush = () => {
+    if (buf.trim()) chunks.push(buf.trim());
+    buf = "";
+  };
+  for (const para of text.split(/\n+/)) {
+    const t = para.trim();
+    if (!t) continue;
+    if (t.length > MAX) {
+      flush();
+      for (const s of t.match(/[^.!?。！？]+[.!?。！？]?/g) ?? [t]) {
+        if (buf.length + s.length > MAX) flush();
+        buf = buf ? `${buf} ${s}` : s;
+      }
+      flush();
+    } else {
+      if (buf.length + t.length + 1 > MAX) flush();
+      buf = buf ? `${buf}\n${t}` : t;
+    }
+  }
+  flush();
+  const parts = chunks.slice(0, 6);
+  if (!parts.length) return null;
+  const results = await Promise.all(parts.map((p) => youdaoTranslate(p)));
+  if (results.some((r) => r == null)) return null;
+  return results.join("\n\n").trim() || null;
+}
+
+/** 国区 App Store 的官方中文介绍（开发者自己本地化的文案，质量优于机翻）。 */
+async function fetchCnStoreDescription(trackId: number): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://itunes.apple.com/lookup?id=${trackId}&country=cn&entity=software`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12_000) },
+    );
+    if (!res.ok) return null;
+    const d = (await res.json()) as { results?: Record<string, unknown>[] };
+    const row = (d.results ?? []).find((r) => Number(r.trackId) === trackId);
+    const desc = typeof row?.description === "string" ? row.description.trim() : "";
+    return hasChinese(desc) ? desc : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildDescZh(
+  trackId: number,
+  description: string,
+  notes: string | null,
+): Promise<Omit<DescZhCache, "at" | "src">> {
+  const notesZh = notes && needsChineseTranslation(notes) ? await machineTranslate(notes.slice(0, 2400)) : null;
+  const cn = await fetchCnStoreDescription(trackId);
+  if (cn) return { zh: cn, notesZh, source: "cn-store" };
+  const zh = await machineTranslate(description.slice(0, 5000));
+  if (!zh) return { zh: "", notesZh: null, source: null, failed: true };
+  return { zh, notesZh, source: "machine" };
+}
+
 export const Actions = {
   registerAccount: defineAction({
     description: "Registers an in-app account (username + password; password stored only as a salted PBKDF2 hash) and returns a session token. The FIRST registered account adopts the legacy un-owned pool of platform bindings, library rows and marks created before accounts existed.",
@@ -7922,8 +8053,12 @@ export const Actions = {
       languages: z.array(z.string()),
       releaseDate: z.string().nullable(),
       updatedDate: z.string().nullable(),
+      descriptionZh: z.string().nullable(),
+      releaseNotesZh: z.string().nullable(),
+      descZhSource: z.enum(["cn-store", "machine"]).nullable(),
+      translating: z.boolean(),
     }),
-    async handler(_ctx, args) {
+    async handler(ctx, args) {
       const country = APP_SEARCH_COUNTRIES.has(args.country ?? "us") ? (args.country ?? "us") : "us";
       const key = `${country}:${args.trackId}`;
       const hit = appDetailCache.get(key);
@@ -7964,7 +8099,7 @@ export const Actions = {
       // Apple returns resized 392x696 thumbnails; the /0x0ss.jpg path is the
       // full-resolution variant already used by the gallery enrichment.
       const upgrade = (u: string) => u.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/0x0ss.jpg");
-      return {
+      const detail = {
         ok: row != null,
         trackId: args.trackId,
         country,
@@ -7989,6 +8124,106 @@ export const Actions = {
         releaseDate: str(row?.releaseDate),
         updatedDate: str(row?.currentVersionReleaseDate),
       };
+
+      // 原文已是中文就不需要译文；否则先查落库缓存，未命中则后台生成，
+      // 前端按 translating 轮询，保证截图/评分/规格首屏秒开。
+      let descriptionZh: string | null = null;
+      let releaseNotesZh: string | null = null;
+      let descZhSource: DescZhSource | null = null;
+      let translating = false;
+      const description = detail.description;
+      if (description && needsChineseTranslation(description)) {
+        const key = `appdetail_zh:${country}:${args.trackId}`;
+        const src = textFingerprint(description);
+        let cached: DescZhCache | null = null;
+        try {
+          const rows = await ctx.db().select().from(schema.meta).where(eq(schema.meta.key, key)).limit(1);
+          if (rows[0]) cached = JSON.parse(rows[0].value) as DescZhCache;
+        } catch {
+          cached = null;
+        }
+        if (cached?.src === src && cached.zh) {
+          descriptionZh = cached.zh;
+          releaseNotesZh = cached.notesZh;
+          descZhSource = cached.source;
+        } else if (cached?.src === src && cached.failed && Date.now() - cached.at < APP_DESC_ZH_RETRY_MS) {
+          // 短时间内不重复打翻译接口
+        } else if (!appDescZhPending.has(key)) {
+          appDescZhPending.add(key);
+          translating = true;
+          void (async () => {
+            try {
+              const out = await buildDescZh(args.trackId, description, detail.releaseNotes);
+              const value = JSON.stringify({ at: Date.now(), src, ...out } satisfies DescZhCache);
+              await ctx.db().insert(schema.meta).values({ key, value })
+                .onConflictDoUpdate({ target: schema.meta.key, set: { value } });
+            } catch {
+              try {
+                const value = JSON.stringify({
+                  at: Date.now(), src, zh: "", notesZh: null, source: null, failed: true,
+                } satisfies DescZhCache);
+                await ctx.db().insert(schema.meta).values({ key, value })
+                  .onConflictDoUpdate({ target: schema.meta.key, set: { value } });
+              } catch { /* 下次打开重试 */ }
+            } finally {
+              appDescZhPending.delete(key);
+            }
+          })();
+        } else {
+          translating = true;
+        }
+      }
+      return { ...detail, descriptionZh, releaseNotesZh, descZhSource, translating };
+    },
+  }),
+
+  /** 任意一段非中文介绍（游戏 / 应用详情页正文）的中文译文。按文本指纹
+   *  落库缓存；译文后台生成，客户端在 translating=true 期间轮询。 */
+  translateText: defineAction({
+    description: "Translate one non-Chinese description block (game/app detail intro) into Simplified Chinese. Cached by text fingerprint; the translation runs in the background so the detail sheet opens instantly.",
+    request: z.object({ text: z.string().trim().min(1).max(8000) }),
+    response: z.object({
+      ok: z.boolean(),
+      needed: z.boolean(),
+      zh: z.string().nullable(),
+      translating: z.boolean(),
+    }),
+    async handler(ctx, args) {
+      const text = args.text;
+      if (!needsChineseTranslation(text)) return { ok: true, needed: false, zh: null, translating: false };
+      const key = `text_zh:${textFingerprint(text)}`;
+      let cached: DescZhCache | null = null;
+      try {
+        const rows = await ctx.db().select().from(schema.meta).where(eq(schema.meta.key, key)).limit(1);
+        if (rows[0]) cached = JSON.parse(rows[0].value) as DescZhCache;
+      } catch {
+        cached = null;
+      }
+      if (cached?.zh) return { ok: true, needed: true, zh: cached.zh, translating: false };
+      if (cached?.failed && Date.now() - cached.at < APP_DESC_ZH_RETRY_MS) {
+        return { ok: true, needed: true, zh: null, translating: false };
+      }
+      if (!appDescZhPending.has(key)) {
+        appDescZhPending.add(key);
+        void (async () => {
+          let zh: string | null = null;
+          try {
+            zh = await machineTranslate(text.slice(0, 6000));
+          } catch {
+            zh = null;
+          }
+          try {
+            const value = JSON.stringify({
+              at: Date.now(), src: "", zh: zh ?? "", notesZh: null,
+              source: zh ? "machine" : null, failed: !zh,
+            } satisfies DescZhCache);
+            await ctx.db().insert(schema.meta).values({ key, value })
+              .onConflictDoUpdate({ target: schema.meta.key, set: { value } });
+          } catch { /* 下次打开重试 */ }
+          finally { appDescZhPending.delete(key); }
+        })();
+      }
+      return { ok: true, needed: true, zh: null, translating: true };
     },
   }),
 

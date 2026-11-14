@@ -30,6 +30,7 @@ type StoreApp = ApiResponse<typeof api, "searchAppStore">["apps"][number];
 type RankingApp = ApiResponse<typeof api, "appStoreRanking">["apps"][number];
 type ArcadeGame = ApiResponse<typeof api, "appleArcadeGames">["games"][number];
 type AppStoreDetailData = ApiResponse<typeof api, "appStoreDetail">;
+type TranslateTextData = ApiResponse<typeof api, "translateText">;
 type AccountData = ApiResponse<typeof api, "getAccounts">;
 type PlatformStatus = AccountData["platforms"][number];
 type LibraryGroup = ApiResponse<typeof api, "listLibrary">["groups"][number];
@@ -1061,19 +1062,9 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
           />
         ) : null}
 
-        {intro && !isIosFreeApp ? (
-          <section className="mt-6">
-            <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">{introHeading}</h2>
-            <p className="mt-2 whitespace-pre-line text-sm leading-[1.7] text-[var(--dim)]">{intro}</p>
-          </section>
-        ) : null}
+        {intro && !isIosFreeApp ? <TranslatedIntro text={intro} heading={introHeading} /> : null}
 
-        {desc && desc !== intro && !isIosFreeApp ? (
-          <section className="mt-6">
-            <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">简介</h2>
-            <p className="mt-2 whitespace-pre-line text-sm leading-[1.7] text-[var(--dim)]">{desc}</p>
-          </section>
-        ) : null}
+        {desc && desc !== intro && !isIosFreeApp ? <TranslatedIntro text={desc} heading="简介" /> : null}
 
         {instructions ? (
           <section className="mt-6">
@@ -2731,6 +2722,74 @@ function fmtAppDate(s: string | null): string {
  * 数据走服务端聚合的 Apple Lookup；接口失败时退回本站已收录的截图与中文介绍，
  * 不会让整个详情页空白。
  */
+/**
+ * 非 iOS 详情页（Epic / Steam / GOG 等）的介绍正文：非中文时自动补中文译文。
+ * 译文走服务端 translateText，按文本指纹缓存；生成期间轮询，不阻塞首屏。
+ */
+function TranslatedIntro({
+  text,
+  heading,
+  sourceLabel,
+  collapsible = true,
+}: {
+  text: string;
+  heading: string;
+  sourceLabel?: string;
+  collapsible?: boolean;
+}) {
+  const [view, setView] = useState<"zh" | "raw">("zh");
+  const [expanded, setExpanded] = useState(false);
+  const query = useQuery({
+    queryKey: ["translateText", text],
+    queryFn: () => api.translateText({ text }),
+    enabled: text.length > 0,
+    staleTime: Infinity,
+    refetchInterval: (q) => {
+      const data = q.state.data as TranslateTextData | undefined;
+      return data?.translating ? 2500 : false;
+    },
+  });
+  const zh = query.data?.zh ?? "";
+  const hasZh = zh.length > 0;
+  const shown = hasZh && view === "zh" ? zh : text;
+  return (
+    <section className="mt-6" data-translated-intro>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">{heading}</h2>
+          {sourceLabel ? <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--dim2)]">{sourceLabel}</span> : null}
+        </div>
+        {hasZh ? <span className="font-mono text-[9px] text-[var(--dim2)]">中文翻译 · 仅供参考</span> : null}
+      </div>
+      {hasZh ? (
+        <div className="mt-2 flex gap-1 rounded-[9px] bg-[var(--surface2)] p-0.5" role="tablist" aria-label="介绍语言">
+          {(["zh", "raw"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              role="tab"
+              aria-selected={view === v}
+              onClick={() => setView(v)}
+              className={`flex-1 rounded-[7px] px-2 py-1.5 text-[11px] font-bold ${view === v ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--glass-hi)]" : "text-[var(--dim2)]"}`}
+            >
+              {v === "zh" ? "中文" : "原文"}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {query.data?.translating && !hasZh ? (
+        <p data-translated-pending className="mt-2 font-mono text-[10px] text-[var(--dim2)]">正在生成中文翻译，稍后自动显示…</p>
+      ) : null}
+      <p data-translated-body className={`mt-2 whitespace-pre-line text-sm leading-[1.7] text-[var(--dim)] ${collapsible && !expanded ? "line-clamp-6" : ""}`}>{shown}</p>
+      {collapsible && shown.length > 220 ? (
+        <button type="button" onClick={() => setExpanded((v) => !v)} className="mt-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+          {expanded ? "收起 ∧" : "展开全文 ∨"}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function AppStoreProfile({
   trackId,
   country,
@@ -2745,11 +2804,17 @@ function AppStoreProfile({
   const [lightbox, setLightbox] = useState<number | null>(null);
   const [showIntro, setShowIntro] = useState(false);
   const [showOfficial, setShowOfficial] = useState(false);
+  const [descView, setDescView] = useState<"zh" | "raw">("zh");
   const query = useQuery({
     queryKey: ["appStoreDetail", trackId, country ?? "us"],
     queryFn: () => api.appStoreDetail({ trackId: trackId!, country }),
     enabled: trackId != null,
     staleTime: 30 * 60_000,
+    // 中文译文是后台生成的，生成期间每 2.5 秒回来取一次。
+    refetchInterval: (q) => {
+      const data = q.state.data as AppStoreDetailData | undefined;
+      return data?.translating ? 2500 : false;
+    },
   });
   const d: AppStoreDetailData | undefined = query.data;
   const officialShots = [...(d?.screenshots ?? []), ...(d?.ipadScreenshots ?? [])];
@@ -2772,6 +2837,10 @@ function AppStoreProfile({
   // 有些新收录的条目中文介绍字段里其实是未翻译的英文，和官方原文重复；
   // 只在确实含中文（或没有原文可读）时才单独展示「应用介绍」。
   const showZh = zh.length > 0 && (/[\u4e00-\u9fff]/.test(zh) || !official);
+  const zhDesc = d?.descriptionZh?.trim() ?? "";
+  const hasZhDesc = zhDesc.length > 0;
+  const translatingDesc = d?.translating === true && !hasZhDesc;
+  const shownDesc = hasZhDesc && descView === "zh" ? zhDesc : official;
   const big = lightbox != null ? images[lightbox] : null;
   const allRows: [string, string][] = [
     ["开发者", d?.sellerName ?? "—"],
@@ -2861,19 +2930,42 @@ function AppStoreProfile({
       ) : null}
 
       {official ? (
-        <div className="mt-4 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--glass-hi)]">
+        <div className="mt-4 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--glass-hi)]" data-app-desc>
           <div className="flex items-baseline justify-between gap-2">
-            <h3 className="text-[12px] font-bold text-[var(--text)]">详细介绍{showZh ? "（App Store 原文）" : ""}</h3>
-            <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">APPLE 官方</span>
+            <h3 className="text-[12px] font-bold text-[var(--text)]">详细介绍</h3>
+            <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">
+              {hasZhDesc && descView === "zh"
+                ? d?.descZhSource === "cn-store" ? "国区官方中文" : "中文翻译"
+                : "APPLE 官方"}
+            </span>
           </div>
-          <p className={`mt-2 whitespace-pre-line text-[12px] leading-[1.75] text-[var(--dim)] ${showOfficial ? "" : "line-clamp-5"}`}>{official}</p>
-          {official.length > 220 ? (
+          {hasZhDesc ? (
+            <div className="mt-2 flex gap-1 rounded-[9px] bg-[var(--surface2)] p-0.5" role="tablist" aria-label="介绍语言">
+              {(["zh", "raw"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  role="tab"
+                  aria-selected={descView === v}
+                  onClick={() => setDescView(v)}
+                  className={`flex-1 rounded-[7px] px-2 py-1.5 text-[11px] font-bold ${descView === v ? "bg-[var(--surface)] text-[var(--text)] shadow-[var(--glass-hi)]" : "text-[var(--dim2)]"}`}
+                >
+                  {v === "zh" ? "中文" : "原文"}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {translatingDesc ? (
+            <p data-app-desc-pending className="mt-2 font-mono text-[10px] leading-[1.6] text-[var(--dim2)]">正在生成中文翻译，稍后自动显示；可先查看原文。</p>
+          ) : null}
+          <p data-app-desc-body className={`mt-2 whitespace-pre-line text-[12px] leading-[1.75] text-[var(--dim)] ${showOfficial ? "" : "line-clamp-5"}`}>{shownDesc}</p>
+          {shownDesc.length > 220 ? (
             <button type="button" onClick={() => setShowOfficial((v) => !v)} className="mt-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
               {showOfficial ? "收起 ∧" : "展开全文 ∨"}
             </button>
           ) : null}
           {d?.releaseNotes && showOfficial ? (
-            <p className="mt-3 border-t border-[var(--border)] pt-3 font-mono text-[10px] leading-[1.6] text-[var(--dim2)]">此版本更新：{d.releaseNotes}</p>
+            <p className="mt-3 border-t border-[var(--border)] pt-3 font-mono text-[10px] leading-[1.6] text-[var(--dim2)]">此版本更新：{d.releaseNotesZh ?? d.releaseNotes}</p>
           ) : null}
         </div>
       ) : null}
@@ -2890,7 +2982,7 @@ function AppStoreProfile({
       ) : null}
 
       <p className="mt-2 font-mono text-[9px] leading-[1.7] text-[var(--dim2)]">
-        截图、介绍与规格来自 Apple 官方 App Store{d?.country ? `（${d.country.toUpperCase()} 区）` : ""}，每 30 分钟刷新；实际价格与下载以商店页为准。
+        截图、介绍与规格来自 Apple 官方 App Store{d?.country ? `（${d.country.toUpperCase()} 区）` : ""}，每 30 分钟刷新；实际价格与下载以商店页为准。{d?.descZhSource === "cn-store" ? " 中文介绍取自该 App 在国区 App Store 的官方文案。" : d?.descZhSource === "machine" ? " 中文介绍由机器翻译，仅供参考，以官方原文为准。" : ""}
       </p>
 
       {big
@@ -5242,17 +5334,7 @@ function LibraryGameDetail({
         {detailQuery.isPending ? (
           <p className="mt-6 text-center text-sm text-[var(--dim)]">正在从官方商店读取这款游戏的介绍和截图…</p>
         ) : gd?.about ? (
-          <section aria-label="游戏介绍" className="mt-7">
-            <div className="flex items-baseline gap-2">
-              <h2 className="font-serif text-[17px] font-bold text-[var(--text)]">游戏介绍</h2>
-              <span className="font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--dim2)]">{gd.sourceLabel}</span>
-            </div>
-            <div className="mt-2.5 grid gap-3 text-[13.5px] leading-[1.85] text-[var(--dim)]">
-              {gd.about.split(/\n{2,}/).map((para, i) => (
-                <p key={i} className="whitespace-pre-line">{para.trim()}</p>
-              ))}
-            </div>
-          </section>
+          <TranslatedIntro text={gd.about} heading="游戏介绍" sourceLabel={gd.sourceLabel} collapsible={false} />
         ) : (
           <p className="mt-6 rounded-[14px] border border-dashed border-[var(--border)] px-4 py-4 text-center text-xs leading-relaxed text-[var(--dim2)]">
             官方商店暂时没有取到这款游戏的详细介绍{gd && gdGallery.length > 0 ? "，上方截图来自官方商店" : ""}，点下方按钮可以去商店页查看完整内容。
