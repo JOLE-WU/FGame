@@ -29,6 +29,9 @@ type AppPrice = ApiResponse<typeof api, "listAppPrices">["apps"][number];
 type StoreApp = ApiResponse<typeof api, "searchAppStore">["apps"][number];
 type RankingApp = ApiResponse<typeof api, "appStoreRanking">["apps"][number];
 type ArcadeGame = ApiResponse<typeof api, "appleArcadeGames">["games"][number];
+type FreeHistoryData = ApiResponse<typeof api, "freeHistory">;
+type FreeHistoryApp = FreeHistoryData["apps"][number];
+type FreeHistoryDay = FreeHistoryData["days"][number];
 type AccountData = ApiResponse<typeof api, "getAccounts">;
 type PlatformStatus = AccountData["platforms"][number];
 type LibraryGroup = ApiResponse<typeof api, "listLibrary">["groups"][number];
@@ -2016,6 +2019,7 @@ const APP_SUB_TABS = [
   { key: "free", label: "限免情报" },
   { key: "ranking", label: "排行榜" },
   { key: "arcade", label: "Arcade" },
+  { key: "history", label: "历史限免" },
 ] as const;
 type AppSubTab = (typeof APP_SUB_TABS)[number]["key"];
 
@@ -2097,6 +2101,26 @@ function rankingToStoreApp(a: RankingApp): StoreApp {
     formattedPrice: a.price || "免费",
     currency: a.currency,
     rating: null,
+    ratingCount: null,
+    collected: false,
+    tag: null,
+    dealId: null,
+  };
+}
+
+/** Arcade 条目落进本地「我关注的」时补齐 StoreApp 字段（订阅制，无单独售价）。 */
+function arcadeToStoreApp(g: ArcadeGame): StoreApp {
+  return {
+    trackId: g.trackId,
+    name: g.name,
+    iconUrl: g.iconUrl,
+    storeUrl: g.storeUrl,
+    sellerName: g.sellerName,
+    genre: g.genre,
+    price: 0,
+    formattedPrice: "Apple Arcade",
+    currency: "USD",
+    rating: g.rating,
     ratingCount: null,
     collected: false,
     tag: null,
@@ -2278,6 +2302,127 @@ function RankingDetail({
   );
 }
 
+/**
+ * Arcade 条目详情：与排行榜详情同一套交互（portal + 右滑返回 + 商店/关注），
+ * 字段按 Arcade 订阅制的特点展示。用 portal 挂到 body 避免被下拉刷新的 transform 困住。
+ */
+function ArcadeDetail({
+  game,
+  watched,
+  onToggleWatch,
+  onClose,
+}: {
+  game: ArcadeGame;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const release = game.releaseDate ? String(game.releaseDate).slice(0, 10) : "";
+  const rows: [string, string][] = [
+    ["收录类型", game.arcadeKind || "Apple Arcade"],
+    ["开发者", game.sellerName || "—"],
+    ["类别", game.genre || "—"],
+    ["评分", game.rating != null ? `${game.rating.toFixed(1)} / 5` : "—"],
+    ["获取方式", "Apple Arcade 订阅"],
+  ];
+  if (release) rows.push(["上架日期", release]);
+
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Arcade 详情：${game.name}`}
+      data-arcade-detail
+      data-app-detail
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回 Arcade 清单"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">APPLE ARCADE · DETAIL</span>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
+        <div className="flex items-center gap-4">
+          {game.iconUrl ? (
+            <img src={game.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
+          ) : (
+            <div className="grid h-[92px] w-[92px] flex-none place-items-center rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(game.name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">APPLE ARCADE</div>
+            <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{game.name}</h1>
+            <p className="mt-1 truncate text-[12px] text-[var(--dim)]">{game.sellerName || "Apple Arcade"}</p>
+          </div>
+        </div>
+
+        <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+              <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
+          国区 App Store 未上线 Apple Arcade，本清单按美区整理；需订阅 Apple Arcade 后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。点下方按钮前往商店查看完整介绍。
+        </p>
+
+        <div className="mt-6 flex gap-2.5">
+          <a
+            href={game.storeUrl ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80"
+          >
+            在 App Store 打开 ↗
+          </a>
+          <button
+            type="button"
+            onClick={onToggleWatch}
+            aria-pressed={watched}
+            aria-label={watched ? `取消关注 ${game.name}` : `关注 ${game.name}`}
+            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
+              watched
+                ? "border-transparent bg-grad text-[var(--accent-ink)]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+            }`}
+          >
+            {watched ? "★ 已关注" : "☆ 加关注"}
+          </button>
+        </div>
+        {watched ? (
+          <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p>
+        ) : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 function RankRow({ app, onOpen }: { app: RankingApp; onOpen?: (app: RankingApp) => void }) {
   const inner = (
     <>
@@ -2386,15 +2531,10 @@ function RankingBoard({ initialRegion, tabs, onOpen }: { initialRegion: string; 
   );
 }
 
-function ArcadeRow({ game }: { game: ArcadeGame }) {
+function ArcadeRow({ game, onOpen }: { game: ArcadeGame; onOpen?: (g: ArcadeGame) => void }) {
   const date = game.releaseDate ? String(game.releaseDate).slice(0, 10) : "";
-  return (
-    <a
-      href={game.storeUrl ?? "#"}
-      target="_blank"
-      rel="noreferrer"
-      className="flex items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70"
-    >
+  const inner = (
+    <>
       {game.iconUrl ? (
         <img src={game.iconUrl} alt="" loading="lazy" className="h-14 w-14 flex-none rounded-[13px] bg-[var(--surface2)] object-cover" />
       ) : (
@@ -2408,12 +2548,25 @@ function ArcadeRow({ game }: { game: ArcadeGame }) {
           {date ? <span className="font-mono text-[9px] text-[var(--dim2)]">{date}</span> : null}
         </div>
       </div>
-      <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">商店 ↗</span>
+      <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">{onOpen ? "详情 →" : "商店 ↗"}</span>
+    </>
+  );
+  const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 text-left shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70";
+  if (onOpen) {
+    return (
+      <button type="button" data-arcade-row onClick={() => onOpen(game)} aria-label={`查看 Arcade 详情：${game.name}`} className={cls}>
+        {inner}
+      </button>
+    );
+  }
+  return (
+    <a href={game.storeUrl ?? "#"} target="_blank" rel="noreferrer" data-arcade-row className={cls}>
+      {inner}
     </a>
   );
 }
 
-function ArcadeBoard({ tabs }: { tabs?: ReactNode }) {
+function ArcadeBoard({ tabs, onOpen }: { tabs?: ReactNode; onOpen?: (g: ArcadeGame) => void }) {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const query = useQuery({
@@ -2435,7 +2588,7 @@ function ArcadeBoard({ tabs }: { tabs?: ReactNode }) {
       <SectionHead no="01" title="Apple Arcade 游戏清单" en={`ARCADE · ${query.data?.total ?? 0} GAMES`} />
       {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。
+        国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购 · 点条目看详情，详情页内可去商店或加关注。
       </p>
       <a
         href="https://apps.apple.com/arcade"
@@ -2467,8 +2620,409 @@ function ArcadeBoard({ tabs }: { tabs?: ReactNode }) {
         <EmptyNote title="没有匹配的游戏" sub="换个关键词，或把类型切回「全部」。" />
       ) : (
         <div className="mt-3 flex flex-col gap-[9px]">
-          {shown.map((g) => <ArcadeRow key={g.trackId} game={g} />)}
+          {shown.map((g) => <ArcadeRow key={g.trackId} game={g} onOpen={onOpen} />)}
         </div>
+      )}
+    </div>
+  );
+}
+
+/** 价格以美区 USD 分计；0 表示当时处于限免。 */
+function fmtCents(cents: number, currency = "USD"): string {
+  if (cents === 0) return "免费";
+  const sym = currency === "CNY" ? "¥" : "$";
+  return `${sym}${(cents / 100).toFixed(2).replace(/\.00$/, "")}`;
+}
+
+/** 全站每日趋势：限免数 / 新增·结束双线。纯 SVG，无图表库。 */
+function TrendChart({ days, metric }: { days: FreeHistoryDay[]; metric: "free" | "flow" }) {
+  if (days.length === 0) return null;
+  const W = 320, H = 118, PL = 10, PR = 10, PT = 14, PB = 20;
+  const n = days.length;
+  const px = (i: number) => PL + (n <= 1 ? 0 : (i * (W - PL - PR)) / (n - 1));
+  const series =
+    metric === "free"
+      ? [{ key: "free", label: "限免中", values: days.map((d) => d.free), color: "var(--free-ink)" }]
+      : [
+          { key: "new", label: "新限免", values: days.map((d) => d.newFree), color: "var(--free-ink)" },
+          { key: "end", label: "已结束", values: days.map((d) => d.endedFree), color: "var(--dim2)" },
+        ];
+  const maxV = Math.max(1, ...series.flatMap((sr) => sr.values));
+  const py = (v: number) => PT + (1 - v / maxV) * (H - PT - PB);
+  const area =
+    `M ${px(0)} ${py(series[0]!.values[0]!)} ` +
+    series[0]!.values.map((v, i) => `L ${px(i)} ${py(v)}`).join(" ") +
+    ` L ${px(n - 1)} ${H - PB} L ${px(0)} ${H - PB} Z`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 118 }} role="img" aria-label="每日限免 App 数量趋势">
+      {[0.25, 0.75].map((f) => (
+        <line key={f} x1={PL} x2={W - PR} y1={PT + f * (H - PT - PB)} y2={PT + f * (H - PT - PB)} stroke="var(--border)" strokeWidth={0.6} strokeDasharray="3 4" />
+      ))}
+      {metric === "free" ? <path d={area} fill="var(--free-bg)" /> : null}
+      {series.map((sr) => (
+        <g key={sr.key}>
+          <polyline points={sr.values.map((v, i) => `${px(i)},${py(v)}`).join(" ")} fill="none" stroke={sr.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+          {sr.values.map((v, i) => (
+            <circle key={i} cx={px(i)} cy={py(v)} r={i === n - 1 ? 3 : 1.7} fill={sr.color} />
+          ))}
+        </g>
+      ))}
+      <text x={PL} y={H - 5} fontSize={9} fill="var(--dim2)" fontFamily="monospace">{days[0]!.date.slice(5)}</text>
+      <text x={W - PR} y={H - 5} textAnchor="end" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{days[n - 1]!.date.slice(5)}</text>
+      <text x={W / 2} y={H - 5} textAnchor="middle" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{n} 天观测</text>
+    </svg>
+  );
+}
+
+/** 列表里的迷你价格轨迹：阶梯线 + 免费点绿色。 */
+function Sparkline({ points }: { points: FreeHistoryApp["points"] }) {
+  const W = 88, H = 26, P = 3;
+  if (points.length === 0) return null;
+  const n = points.length;
+  const px = (i: number) => P + (n <= 1 ? 0 : (i * (W - P * 2)) / (n - 1));
+  const max = Math.max(1, ...points.map((p) => p.cents));
+  const py = (c: number) => P + (1 - c / max) * (H - P * 2);
+  let d = `M ${px(0)} ${py(points[0]!.cents)}`;
+  for (let i = 1; i < n; i++) d += ` L ${px(i)} ${py(points[i - 1]!.cents)} L ${px(i)} ${py(points[i]!.cents)}`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="flex-none" role="img" aria-label="价格轨迹">
+      <line x1={0} x2={W} y1={py(0)} y2={py(0)} stroke="var(--free-ink)" strokeWidth={0.6} strokeDasharray="2 2" opacity={0.5} />
+      <path d={d} fill="none" stroke="var(--dim2)" strokeWidth={1.3} strokeLinejoin="round" />
+      {points.map((p, i) =>
+        p.cents === 0 ? <circle key={i} cx={px(i)} cy={py(0)} r={1.8} fill="var(--free-ink)" /> : null,
+      )}
+    </svg>
+  );
+}
+
+/** 详情页大图：阶梯价格线，底部绿带标出「免费」区间。 */
+function PriceChart({ app }: { app: FreeHistoryApp }) {
+  const pts = app.points;
+  if (pts.length === 0) return null;
+  const W = 320, H = 146, PL = 12, PR = 12, PT = 18, PB = 28;
+  const n = pts.length;
+  const px = (i: number) => PL + (n <= 1 ? 0 : (i * (W - PL - PR)) / (n - 1));
+  const max = Math.max(1, ...pts.map((p) => p.cents));
+  const realMax = Math.max(0, ...pts.map((p) => p.cents));
+  const py = (c: number) => PT + (1 - c / max) * (H - PT - PB);
+  let d = `M ${px(0)} ${py(pts[0]!.cents)}`;
+  for (let i = 1; i < n; i++) d += ` L ${px(i)} ${py(pts[i - 1]!.cents)} L ${px(i)} ${py(pts[i]!.cents)}`;
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 146 }} role="img" aria-label={`${app.name} 历史价格曲线`}>
+      <rect x={PL} y={py(0) - 4} width={W - PL - PR} height={8} rx={4} fill="var(--free-bg)" />
+      <line x1={PL} x2={W - PR} y1={py(0)} y2={py(0)} stroke="var(--free-ink)" strokeWidth={0.7} strokeDasharray="3 3" opacity={0.7} />
+      <path d={d} fill="none" stroke="var(--text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
+      {pts.map((p, i) => (
+        <circle key={i} cx={px(i)} cy={py(p.cents)} r={i === n - 1 ? 3.4 : 2.2} fill={p.cents === 0 ? "var(--free-ink)" : "var(--accent)"} />
+      ))}
+      <text x={PL} y={12} fontSize={9} fill="var(--dim2)" fontFamily="monospace">最高 {fmtCents(realMax, app.currency)}</text>
+      <text x={W - PR} y={12} textAnchor="end" fontSize={9} fill="var(--free-ink)" fontFamily="monospace">免费线</text>
+      {realMax === 0 ? (
+        <text x={W / 2} y={H / 2} textAnchor="middle" fontSize={10} fill="var(--dim2)" fontFamily="monospace">观测期内始终免费</text>
+      ) : null}
+      <text x={PL} y={H - 7} fontSize={9} fill="var(--dim2)" fontFamily="monospace">{pts[0]!.date.slice(5)}</text>
+      <text x={W - PR} y={H - 7} textAnchor="end" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{pts[n - 1]!.date.slice(5)}</text>
+      <text x={W / 2} y={H - 7} textAnchor="middle" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{n} 个观测点</text>
+    </svg>
+  );
+}
+
+/** 单个 App 的历史限免详情：与排行榜 / Arcade 详情同一套交互。 */
+function PriceDetail({
+  app,
+  watched,
+  onToggleWatch,
+  onClose,
+}: {
+  app: FreeHistoryApp;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const rows: [string, string][] = [
+    ["当前价格", fmtCents(app.currentCents, app.currency)],
+    ["历史最高", fmtCents(app.wasCents, app.currency)],
+    ["限免次数", `${app.freeWindows} 次`],
+    ["限免天数", `${app.freeDays} / ${app.points.length} 个观测日`],
+    ["首次记录", app.firstDate],
+    ["最近记录", app.lastDate],
+    ["价格口径", `美区 App Store · ${app.currency}`],
+  ];
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`历史限免详情：${app.name}`}
+      data-price-detail
+      data-app-detail
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button type="button" onClick={onClose} aria-label="返回历史限免" className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]">
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">APP STORE · PRICE HISTORY</span>
+        </div>
+      </div>
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
+        <div className="flex items-center gap-4">
+          {app.iconUrl ? (
+            <img src={app.iconUrl} alt="" className="h-[76px] w-[76px] flex-none rounded-[19px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
+          ) : (
+            <div className="grid h-[76px] w-[76px] flex-none place-items-center rounded-[19px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(app.name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">{app.isFreeNow ? "正在限免" : "限免历史"}</div>
+            <h1 className="mt-1 font-serif text-[21px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
+            <p className="mt-1 font-num text-[18px] font-bold" style={{ color: app.isFreeNow ? "var(--free-ink)" : "var(--text)" }}>
+              {fmtCents(app.currentCents, app.currency)}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
+          <div className="mb-1 flex items-baseline justify-between px-1">
+            <span className="text-[11px] font-bold text-[var(--text)]">历史价格曲线</span>
+            <span className="font-mono text-[9px] text-[var(--dim2)]">STEP · DAILY</span>
+          </div>
+          <PriceChart app={app} />
+        </div>
+
+        <dl className="mt-4 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+              <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
+          曲线每个点都是本站每日调用 Apple 官方 Lookup 记录下的真实价格（美区 USD），0 元即当日限免。观测自 2026/11/08 起逐日累积，早期收录的 App 点数会更多；中途加入观察的应用不会有更早的数据。
+        </p>
+
+        <div className="mt-6 flex gap-2.5">
+          <a href={app.storeUrl ?? "#"} target="_blank" rel="noreferrer" className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80">
+            在 App Store 打开 ↗
+          </a>
+          <button
+            type="button"
+            onClick={onToggleWatch}
+            aria-pressed={watched}
+            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
+              watched ? "border-transparent bg-grad text-[var(--accent-ink)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+            }`}
+          >
+            {watched ? "★ 已关注" : "☆ 加关注"}
+          </button>
+        </div>
+        {watched ? <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p> : null}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** 历史限免条目落进本地「我关注的」时补齐 StoreApp 字段。 */
+function freeHistoryToStoreApp(a: FreeHistoryApp): StoreApp {
+  return {
+    trackId: a.trackId,
+    name: a.name,
+    iconUrl: a.iconUrl,
+    storeUrl: a.storeUrl,
+    sellerName: null,
+    genre: null,
+    price: a.currentCents / 100,
+    formattedPrice: fmtCents(a.currentCents, a.currency),
+    currency: a.currency,
+    rating: null,
+    ratingCount: null,
+    collected: false,
+    tag: null,
+    dealId: null,
+  };
+}
+
+function HistoryRow({ app, onOpen }: { app: FreeHistoryApp; onOpen?: (a: FreeHistoryApp) => void }) {
+  const sub = [fmtCents(app.currentCents, app.currency), app.wasCents > app.currentCents ? `原价 ${fmtCents(app.wasCents, app.currency)}` : null, `限免 ${app.freeWindows} 次 · ${app.freeDays} 天`]
+    .filter(Boolean)
+    .join(" · ");
+  const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 text-left shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70";
+  const inner = (
+    <>
+      {app.iconUrl ? (
+        <img src={app.iconUrl} alt="" loading="lazy" className="h-11 w-11 flex-none rounded-[12px] bg-[var(--surface2)] object-cover" />
+      ) : (
+        <div className="h-11 w-11 flex-none rounded-[12px] bg-[var(--surface2)]" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-bold text-[var(--text)]">{app.name}</div>
+        <div className="mt-0.5 truncate font-mono text-[9.5px] text-[var(--dim)]">{sub}</div>
+      </div>
+      <Sparkline points={app.points} />
+      <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">详情 →</span>
+    </>
+  );
+  if (onOpen) {
+    return (
+      <button type="button" data-history-row onClick={() => onOpen(app)} aria-label={`查看历史限免：${app.name}`} className={cls}>
+        {inner}
+      </button>
+    );
+  }
+  return <div className={cls}>{inner}</div>;
+}
+
+/** 第 4 个板块：全站趋势 + 统计 + App 价格轨迹列表。 */
+function HistoryBoard({ tabs, onOpen }: { tabs?: ReactNode; onOpen?: (a: FreeHistoryApp) => void }) {
+  const [metric, setMetric] = useState<"free" | "flow">("free");
+  const [filter, setFilter] = useState<"free" | "changed" | "all">("free");
+  const [showAll, setShowAll] = useState(false);
+  const query = useQuery({
+    queryKey: ["freeHistory"],
+    queryFn: () => api.freeHistory({}),
+    staleTime: 30 * 60_000,
+  });
+  const days = query.data?.days ?? [];
+  const apps = query.data?.apps ?? [];
+  const summary = query.data?.summary;
+  const todayFree = days.length ? days[days.length - 1]!.free : 0;
+  const filtered = useMemo(() => {
+    const picked =
+      filter === "free" ? apps.filter((a) => a.isFreeNow)
+      : filter === "changed" ? apps.filter((a) => a.wasCents > a.currentCents)
+      : apps;
+    // Apps with an actual price change make the sparkline meaningful, so put
+    // them first instead of leading with a wall of always-free flat lines.
+    return picked.slice().sort(
+      (a, b) =>
+        Number(b.wasCents > b.currentCents) - Number(a.wasCents > a.currentCents) ||
+        b.freeWindows - a.freeWindows ||
+        b.freeDays - a.freeDays ||
+        a.name.localeCompare(b.name),
+    );
+  }, [apps, filter]);
+  const shown = showAll ? filtered.slice(0, 60) : filtered.slice(0, 12);
+  const cards: [string, string | number][] = [
+    ["今日限免", todayFree],
+    ["曾限免", summary?.everFree ?? "—"],
+    ["价格变动", summary?.changedApps ?? "—"],
+    ["观测天数", summary?.dayCount ?? "—"],
+  ];
+  return (
+    <div className="mt-5 pb-2" data-board="history">
+      <SectionHead no="01" title="历史限免曲线" en="FREE HISTORY" />
+      {tabs ?? null}
+      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+        基于本站每日记录的 App Store 官方价格（美区 USD）· 自 {query.data?.since ?? "2026-11-08"} 起逐日累积 · 点条目看单个 App 的完整曲线
+      </p>
+
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {cards.map(([label, val]) => (
+          <div key={label} className="rounded-[13px] border border-[var(--border)] bg-[var(--surface)] px-2 py-2.5 text-center shadow-[var(--glass-hi)]">
+            <div className="font-num text-[19px] font-bold leading-none text-[var(--text)]">{val}</div>
+            <div className="mt-1.5 font-mono text-[8.5px] text-[var(--dim2)]">{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {query.isPending ? (
+        <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取历史快照…</p>
+      ) : query.isError ? (
+        <EmptyNote title="历史曲线暂时读不到" sub="快照接口没响应或网络超时，稍后重试。" />
+      ) : days.length === 0 ? (
+        <EmptyNote title="还没有历史数据" sub="每日价格快照会从今天开始逐日累积，过几天再来看曲线。" />
+      ) : (
+        <>
+          <div className="mt-3 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <div className="text-[12px] font-bold text-[var(--text)]">每日限免 App 数</div>
+                <div className="mt-0.5 font-mono text-[9px] text-[var(--dim2)]">{query.data?.since} → {query.data?.until}</div>
+              </div>
+              <div className="text-right">
+                <div className="font-num text-[22px] font-bold leading-none" style={{ color: "var(--free-ink)" }}>{todayFree}</div>
+                <div className="mt-1 font-mono text-[8.5px] text-[var(--dim2)]">今日 / {days[days.length - 1]!.tracked} 款在观察</div>
+              </div>
+            </div>
+            <div className="mt-2 flex gap-1.5">
+              {(["free", "flow"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMetric(m)}
+                  aria-pressed={metric === m}
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${metric === m ? "bg-grad text-[var(--accent-ink)]" : "border border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"}`}
+                >
+                  {m === "free" ? "限免数" : "新增 / 结束"}
+                </button>
+              ))}
+            </div>
+            <div className="mt-1">
+              <TrendChart days={days} metric={metric} />
+            </div>
+            <div className="flex items-center gap-3 px-1 font-mono text-[9px] text-[var(--dim2)]">
+              {metric === "free" ? (
+                <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--free-ink)" }} />当日处于限免</span>
+              ) : (
+                <>
+                  <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--free-ink)" }} />新开始限免</span>
+                  <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--dim2)" }} />限免结束</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-baseline justify-between">
+            <h2 className="text-[13px] font-bold text-[var(--text)]">App 价格轨迹</h2>
+            <span className="font-mono text-[9px] text-[var(--dim2)]">{filtered.length} 款</span>
+          </div>
+          <div className="mt-2 flex gap-1.5">
+            {([["free", "限免中"], ["changed", "有变动"], ["all", "全部"]] as const).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => { setFilter(k); setShowAll(false); }}
+                aria-pressed={filter === k}
+                className={`rounded-full px-3 py-1.5 text-[10.5px] font-bold ${filter === k ? "bg-grad text-[var(--accent-ink)]" : "border border-[var(--border)] bg-[var(--surface)] text-[var(--dim)]"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {shown.length === 0 ? (
+            <EmptyNote title="没有匹配的应用" sub="切换上方筛选，或过几天等快照累积更多。" />
+          ) : (
+            <>
+              <div className="mt-3 flex flex-col gap-[9px]">
+                {shown.map((a) => <HistoryRow key={a.trackId} app={a} onOpen={onOpen} />)}
+              </div>
+              {!showAll && filtered.length > shown.length ? (
+                <button type="button" onClick={() => setShowAll(true)} className="mt-3 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface)] py-2.5 text-[11px] font-bold text-[var(--text)]">
+                  显示更多（还有 {filtered.length - shown.length} 款）
+                </button>
+              ) : null}
+            </>
+          )}
+          <p className="mt-3 font-mono text-[9px] leading-[1.6] text-[var(--dim2)]">
+            曲线为每日一次的真实价格快照，不是连续监控；应用首次进入观察名单之前的时段没有数据，请勿据此判断 Apple 未显示的历史价格。
+          </p>
+        </>
       )}
     </div>
   );
@@ -2493,6 +3047,10 @@ function AppsPage({
   const [subTab, setSubTab] = useState<AppSubTab>("free");
   // 排行榜条目先落在应用内详情页，由详情页再决定去商店或加关注。
   const [detailRank, setDetailRank] = useState<{ app: RankingApp; meta: RankingMeta } | null>(null);
+  // Arcade 条目同样先落在应用内详情页。
+  const [detailArcade, setDetailArcade] = useState<ArcadeGame | null>(null);
+  // 历史限免条目点进价格曲线详情页。
+  const [detailPrice, setDetailPrice] = useState<FreeHistoryApp | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -2726,6 +3284,22 @@ function AppsPage({
           onClose={() => setDetailRank(null)}
         />
       ) : null}
+      {detailArcade ? (
+        <ArcadeDetail
+          game={detailArcade}
+          watched={storeWatchIds.has(detailArcade.trackId)}
+          onToggleWatch={() => toggleStoreWatch(arcadeToStoreApp(detailArcade))}
+          onClose={() => setDetailArcade(null)}
+        />
+      ) : null}
+      {detailPrice ? (
+        <PriceDetail
+          app={detailPrice}
+          watched={storeWatchIds.has(detailPrice.trackId)}
+          onToggleWatch={() => toggleStoreWatch(freeHistoryToStoreApp(detailPrice))}
+          onClose={() => setDetailPrice(null)}
+        />
+      ) : null}
       <div className="flex items-baseline gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
@@ -2733,7 +3307,9 @@ function AppsPage({
       {subTab === "ranking" ? (
         <RankingBoard initialRegion={region} tabs={subTabsRow} onOpen={(app, meta) => setDetailRank({ app, meta })} />
       ) : subTab === "arcade" ? (
-        <ArcadeBoard tabs={subTabsRow} />
+        <ArcadeBoard tabs={subTabsRow} onOpen={(g) => setDetailArcade(g)} />
+      ) : subTab === "history" ? (
+        <HistoryBoard tabs={subTabsRow} onOpen={(a) => setDetailPrice(a)} />
       ) : (
         <div className="mt-5">
       <SectionHead no="01" title="限免情报" en="IOS APP FREEBIES" />

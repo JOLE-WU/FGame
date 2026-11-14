@@ -7737,4 +7737,153 @@ export const Actions = {
     },
   }),
 
+  /**
+   * Historical App Store freebie trend, derived from the daily price
+   * snapshots (one row per tracked app per day). No synthetic data: every
+   * point is a real iTunes Lookup price recorded at the time.
+   */
+  freeHistory: defineAction({
+    description: "Historical limited-time-free trend from daily App Store price snapshots: per-day free app counts and per-app price point series. Data starts 2026-11-08 and grows daily.",
+    request: z.object({}),
+    response: z.object({
+      ok: z.boolean(),
+      since: z.string(),
+      until: z.string(),
+      days: z.array(
+        z.object({
+          date: z.string(),
+          tracked: z.number(),
+          free: z.number(),
+          newFree: z.number(),
+          endedFree: z.number(),
+        }),
+      ),
+      apps: z.array(
+        z.object({
+          trackId: z.number(),
+          name: z.string(),
+          iconUrl: z.string().nullable(),
+          storeUrl: z.string().nullable(),
+          currency: z.string(),
+          points: z.array(z.object({ date: z.string(), cents: z.number() })),
+          freeDays: z.number(),
+          freeWindows: z.number(),
+          currentCents: z.number(),
+          wasCents: z.number(),
+          isFreeNow: z.boolean(),
+          firstDate: z.string(),
+          lastDate: z.string(),
+        }),
+      ),
+      summary: z.object({
+        trackedApps: z.number(),
+        currentlyFree: z.number(),
+        everFree: z.number(),
+        changedApps: z.number(),
+        longestFreeDays: z.number(),
+        dayCount: z.number(),
+      }),
+    }),
+    async handler(ctx) {
+      const db = ctx.db<typeof schema>();
+      const snaps = await db.select().from(schema.appPriceSnapshots);
+      const watch = await db.select().from(schema.appWatch);
+      const watchMap = new Map(watch.map((w) => [w.trackId, w]));
+
+      const allDates = Array.from(new Set(snaps.map((s) => s.snapshotDate))).sort();
+      const dateIndex = new Map(allDates.map((d, i) => [d, i]));
+      type DayAgg = { tracked: number; free: number; newFree: number; endedFree: number };
+      const dayMap = new Map<string, DayAgg>(allDates.map((d) => [d, { tracked: 0, free: 0, newFree: 0, endedFree: 0 }]));
+      for (const s of snaps) {
+        const x = dayMap.get(s.snapshotDate);
+        if (!x) continue;
+        x.tracked++;
+        if (s.priceCents === 0) x.free++;
+      }
+
+      const byTrack = new Map<number, { date: string; cents: number; currency: string }[]>();
+      for (const s of snaps) {
+        const arr = byTrack.get(s.trackId) ?? [];
+        arr.push({ date: s.snapshotDate, cents: s.priceCents, currency: s.currency });
+        byTrack.set(s.trackId, arr);
+      }
+
+      const apps = [];
+      let everFree = 0;
+      let changed = 0;
+      let longest = 0;
+      let currentlyFree = 0;
+      for (const [trackId, raw] of byTrack) {
+        const sorted = raw.slice().sort((a, b) => a.date.localeCompare(b.date));
+        const points = sorted.map((x) => ({ date: x.date, cents: x.cents }));
+        // Only compare observations on consecutive days: an app entering the
+        // watchlist mid-series must not be mistaken for a fresh freebie.
+        for (let i = 1; i < points.length; i++) {
+          const prev = points[i - 1]!;
+          const cur = points[i]!;
+          const gap = (dateIndex.get(cur.date) ?? 0) - (dateIndex.get(prev.date) ?? 0);
+          if (gap !== 1) continue;
+          const day = dayMap.get(cur.date);
+          if (!day) continue;
+          if (prev.cents !== 0 && cur.cents === 0) day.newFree++;
+          if (prev.cents === 0 && cur.cents !== 0) day.endedFree++;
+        }
+        const freeDays = points.filter((p) => p.cents === 0).length;
+        let windows = 0;
+        points.forEach((p, i) => {
+          if (p.cents === 0 && (i === 0 || points[i - 1]!.cents !== 0)) windows++;
+        });
+        const current = points[points.length - 1];
+        if (!current) continue;
+        const wasCents = Math.max(...points.map((p) => p.cents));
+        const isChanged = points.some((p) => p.cents !== current.cents);
+        const isFreeNow = current.cents === 0;
+        if (freeDays > 0) everFree++;
+        if (isChanged) changed++;
+        if (isFreeNow) currentlyFree++;
+        longest = Math.max(longest, freeDays);
+        const w = watchMap.get(trackId);
+        apps.push({
+          trackId,
+          name: w?.name ?? `App ${trackId}`,
+          iconUrl: w?.iconUrl ?? null,
+          storeUrl: w?.storeUrl ?? null,
+          currency: sorted[sorted.length - 1]?.currency ?? "USD",
+          points,
+          freeDays,
+          freeWindows: windows,
+          currentCents: current.cents,
+          wasCents,
+          isFreeNow,
+          firstDate: points[0]?.date ?? "",
+          lastDate: current.date,
+        });
+      }
+      // Free-now first, then the longest free streak, then apps with a real
+      // price change ahead of flat ones.
+      apps.sort(
+        (a, b) =>
+          Number(b.isFreeNow) - Number(a.isFreeNow) ||
+          b.freeDays - a.freeDays ||
+          Number(b.currentCents !== b.wasCents) - Number(a.currentCents !== a.wasCents) ||
+          a.name.localeCompare(b.name),
+      );
+      return {
+        ok: true,
+        since: allDates[0] ?? "",
+        until: allDates[allDates.length - 1] ?? "",
+        days: allDates.map((date) => ({ date, ...dayMap.get(date)! })),
+        apps,
+        summary: {
+          trackedApps: apps.length,
+          currentlyFree,
+          everFree,
+          changedApps: changed,
+          longestFreeDays: longest,
+          dayCount: allDates.length,
+        },
+      };
+    },
+  }),
+
 } satisfies ActionsModule;
