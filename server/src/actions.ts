@@ -4719,6 +4719,74 @@ const APP_SEARCH_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", 
 const APP_SEARCH_TTL_MS = 5 * 60_000;
 const appSearchCache = new Map<string, { at: number; rows: Record<string, unknown>[] }>();
 
+/* ------------------------------------------------------------------ */
+/* App Store 排行榜 / Apple Arcade                                     */
+/* ------------------------------------------------------------------ */
+// Marketing Tools RSS v2 的 ?genre= 实测不生效（带 6014 仍返回总榜），只有
+// v1 iTunes RSS 支持任意 genre（含全部游戏子分类），所以榜单统一走 v1。
+const APP_RANKING_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", "kr", "sg", "au"]);
+const APP_RANKING_TTL_MS = 10 * 60_000;
+const GAME_GENRE_IDS = new Set([
+  6014, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009,
+  7011, 7012, 7013, 7014, 7015, 7016, 7017, 7018, 7019,
+]);
+type RankingAppOut = {
+  rank: number;
+  trackId: number;
+  name: string;
+  iconUrl: string | null;
+  storeUrl: string | null;
+  sellerName: string | null;
+  genre: string | null;
+  price: string;
+  currency: string;
+  releaseDate: string | null;
+};
+const appRankingCache = new Map<string, { at: number; apps: RankingAppOut[] }>();
+
+// Apple Arcade 没有公开清单 API：官方 apps.apple.com/arcade 在国区会被
+// 重定向到 Today，iTunes 元数据也不带 arcade 标记。改为聚合 Apple 官方
+// Search API 的 Arcade 相关检索，再用「无独立售价」筛出只能订阅获取的
+// 游戏（Arcade 游戏不能单独购买，故 formattedPrice / price 均缺失）。
+const ARCADE_TTL_MS = 6 * 60 * 60_000;
+const ARCADE_TERMS = ["apple arcade", "apple arcade games", "arcade originals"];
+type ArcadeGameOut = {
+  trackId: number;
+  name: string;
+  iconUrl: string | null;
+  storeUrl: string | null;
+  sellerName: string | null;
+  genre: string | null;
+  releaseDate: string | null;
+  rating: number | null;
+  arcadeKind: string;
+};
+let arcadeCache: { at: number; games: ArcadeGameOut[] } | null = null;
+
+const rankingAppSchema = z.object({
+  rank: z.number(),
+  trackId: z.number(),
+  name: z.string(),
+  iconUrl: z.string().nullable(),
+  storeUrl: z.string().nullable(),
+  sellerName: z.string().nullable(),
+  genre: z.string().nullable(),
+  price: z.string(),
+  currency: z.string(),
+  releaseDate: z.string().nullable(),
+});
+const arcadeGameSchema = z.object({
+  trackId: z.number(),
+  name: z.string(),
+  iconUrl: z.string().nullable(),
+  storeUrl: z.string().nullable(),
+  sellerName: z.string().nullable(),
+  genre: z.string().nullable(),
+  releaseDate: z.string().nullable(),
+  rating: z.number().nullable(),
+  arcadeKind: z.string(),
+});
+
 export const Actions = {
   registerAccount: defineAction({
     description: "Registers an in-app account (username + password; password stored only as a salted PBKDF2 hash) and returns a session token. The FIRST registered account adopts the legacy un-owned pool of platform bindings, library rows and marks created before accounts existed.",
@@ -5804,6 +5872,170 @@ export const Actions = {
         })
         .slice(0, 25);
       return { country, apps };
+    },
+  }),
+
+  appStoreRanking: defineAction({
+    description: "Returns an official App Store chart for one storefront. Supports apps vs games, free vs paid charts, and any game sub-genre; data comes from Apple's iTunes RSS feed. Cached 10 minutes per combination.",
+    request: z.object({
+      country: z.string().trim().min(2).max(5).optional(),
+      kind: z.enum(["apps", "games"]).optional(),
+      chart: z.enum(["free", "paid"]).optional(),
+      genre: z.number().int().positive().optional(),
+      limit: z.number().int().min(10).max(100).optional(),
+    }),
+    response: z.object({
+      country: z.string(),
+      kind: z.enum(["apps", "games"]),
+      chart: z.enum(["free", "paid"]),
+      genre: z.number().nullable(),
+      apps: z.array(rankingAppSchema),
+      ok: z.boolean(),
+    }),
+    async handler(_ctx, args) {
+      const country = APP_RANKING_COUNTRIES.has(args.country ?? "cn") ? (args.country ?? "cn") : "cn";
+      const kind = args.kind === "games" ? "games" : "apps";
+      const chart = args.chart === "paid" ? "paid" : "free";
+      const limit = Math.min(100, Math.max(10, args.limit ?? 50));
+      // Games default to the Games genre (6014); apps use the all-apps chart.
+      const genre =
+        kind === "games"
+          ? args.genre && GAME_GENRE_IDS.has(args.genre)
+            ? args.genre
+            : 6014
+          : args.genre && Number.isInteger(args.genre)
+            ? args.genre
+            : null;
+      const cacheKey = `${country}:${kind}:${chart}:${genre ?? 0}:${limit}`;
+      const empty = { country, kind, chart, genre, apps: [] as RankingAppOut[], ok: false };
+      const cached = appRankingCache.get(cacheKey);
+      if (cached && Date.now() - cached.at < APP_RANKING_TTL_MS) {
+        return { country, kind, chart, genre, apps: cached.apps, ok: true };
+      }
+      const feed = chart === "free" ? "topfreeapplications" : "toppaidapplications";
+      const genreSeg = genre ? `/genre=${genre}` : "";
+      const url = `https://itunes.apple.com/${country}/rss/${feed}/limit=${limit}${genreSeg}/json`;
+      let raw: Record<string, unknown>;
+      try {
+        const res = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) return empty;
+        raw = (await res.json()) as Record<string, unknown>;
+      } catch {
+        // Apple unreachable: keep the last good chart rather than blanking.
+        return cached ? { country, kind, chart, genre, apps: cached.apps, ok: true } : empty;
+      }
+      const feedObj = raw.feed && typeof raw.feed === "object" ? (raw.feed as Record<string, unknown>) : {};
+      const entry = feedObj.entry;
+      const list: Record<string, unknown>[] = Array.isArray(entry)
+        ? (entry as Record<string, unknown>[])
+        : entry && typeof entry === "object"
+          ? [entry as Record<string, unknown>]
+          : [];
+      const rec = (v: unknown): Record<string, unknown> =>
+        v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+      const attrs = (v: unknown): Record<string, unknown> => rec(rec(v).attributes);
+      const apps: RankingAppOut[] = [];
+      for (const e of list) {
+        const name = String(rec(e["im:name"]).label ?? "").trim();
+        if (!name) continue;
+        const imgs = Array.isArray(e["im:image"]) ? (e["im:image"] as Record<string, unknown>[]) : [];
+        const iconRaw = String(rec(imgs[imgs.length - 1] ?? imgs[0]).label ?? "");
+        const priceObj = rec(e["im:price"]);
+        const priceAttrs = attrs(e["im:price"]);
+        const catAttrs = attrs(e.category);
+        apps.push({
+          rank: apps.length + 1,
+          trackId: Number(attrs(e.id)["im:id"] ?? 0),
+          name,
+          iconUrl: iconRaw ? iconRaw.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
+          storeUrl: String(attrs(e.link).href ?? rec(e.id).label ?? "") || null,
+          sellerName: String(rec(e["im:artist"]).label ?? "") || null,
+          genre: String(catAttrs.label ?? "") || null,
+          price: String(priceObj.label ?? ""),
+          currency: String(priceAttrs.currency ?? ""),
+          releaseDate: String(rec(e["im:releaseDate"]).label ?? "") || null,
+        });
+      }
+      if (apps.length === 0) return empty;
+      appRankingCache.set(cacheKey, { at: Date.now(), apps });
+      if (appRankingCache.size > 120) {
+        for (const k of [...appRankingCache.keys()].slice(0, 40)) appRankingCache.delete(k);
+      }
+      return { country, kind, chart, genre, apps, ok: true };
+    },
+  }),
+
+  appleArcadeGames: defineAction({
+    description: "Lists Apple Arcade games by aggregating Apple's official iTunes Search API across Arcade-related terms and keeping titles that have no standalone purchase price (Arcade titles are subscription-only). US storefront only: Apple Arcade is not available on the China mainland storefront. Cached 6 hours.",
+    request: z.object({ country: z.string().trim().min(2).max(5).optional() }),
+    response: z.object({
+      country: z.string(),
+      total: z.number(),
+      games: z.array(arcadeGameSchema),
+      ok: z.boolean(),
+    }),
+    async handler(_ctx, _args) {
+      const country = "us";
+      if (arcadeCache && Date.now() - arcadeCache.at < ARCADE_TTL_MS) {
+        return { country, total: arcadeCache.games.length, games: arcadeCache.games, ok: true };
+      }
+      const settled = await Promise.allSettled(
+        ARCADE_TERMS.map(async (term) => {
+          const res = await fetch(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=us&entity=software&limit=200`,
+            { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(20_000) },
+          );
+          if (!res.ok) return [] as Record<string, unknown>[];
+          const d = (await res.json()) as { results?: unknown };
+          return Array.isArray(d.results) ? (d.results as Record<string, unknown>[]) : [];
+        }),
+      );
+      const merged = new Map<number, Record<string, unknown>>();
+      for (const r of settled) {
+        if (r.status !== "fulfilled") continue;
+        for (const x of r.value) {
+          const id = Number(x.trackId);
+          if (Number.isFinite(id) && id > 0 && !merged.has(id)) merged.set(id, x);
+        }
+      }
+      const games: ArcadeGameOut[] = [];
+      for (const r of merged.values()) {
+        const name = typeof r.trackName === "string" ? r.trackName.trim() : "";
+        if (!name || name === "Apple Games") continue;
+        const genreIds = Array.isArray(r.genreIds) ? r.genreIds.map(String) : [];
+        const genres = Array.isArray(r.genres) ? r.genres.map(String) : [];
+        if (!genreIds.includes("6014") && !genres.includes("Games")) continue;
+        // Arcade titles cannot be bought individually: Apple omits both price
+        // fields. Ordinary free apps return formattedPrice="Free" / price=0.
+        if (r.formattedPrice !== undefined || r.price !== undefined) continue;
+        const desc = typeof r.description === "string" ? r.description : "";
+        let arcadeKind = "Arcade 原创";
+        if (/\+\s*$/.test(name)) arcadeKind = "App Store Greats";
+        else if (/apple arcade/i.test(desc) || /arcade edition/i.test(name)) arcadeKind = "Arcade 版";
+        const art = typeof r.artworkUrl100 === "string" ? (r.artworkUrl100 as string) : "";
+        games.push({
+          trackId: Number(r.trackId),
+          name,
+          iconUrl: art ? art.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
+          storeUrl: typeof r.trackViewUrl === "string" ? (r.trackViewUrl as string) : null,
+          sellerName: typeof r.sellerName === "string" ? (r.sellerName as string) : null,
+          genre: typeof r.primaryGenreName === "string" ? (r.primaryGenreName as string) : null,
+          releaseDate: typeof r.releaseDate === "string" ? (r.releaseDate as string) : null,
+          rating: typeof r.averageUserRating === "number" ? (r.averageUserRating as number) : null,
+          arcadeKind,
+        });
+      }
+      games.sort((a, b) => String(b.releaseDate ?? "").localeCompare(String(a.releaseDate ?? "")));
+      if (games.length === 0) {
+        return arcadeCache
+          ? { country, total: arcadeCache.games.length, games: arcadeCache.games, ok: true }
+          : { country, total: 0, games: [], ok: false };
+      }
+      arcadeCache = { at: Date.now(), games };
+      return { country, total: games.length, games, ok: true };
     },
   }),
 

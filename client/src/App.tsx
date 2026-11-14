@@ -26,6 +26,8 @@ declare const __FGAME_BUILD__: string;
 type Deal = ApiResponse<typeof api, "listDeals">["deals"][number];
 type AppPrice = ApiResponse<typeof api, "listAppPrices">["apps"][number];
 type StoreApp = ApiResponse<typeof api, "searchAppStore">["apps"][number];
+type RankingApp = ApiResponse<typeof api, "appStoreRanking">["apps"][number];
+type ArcadeGame = ApiResponse<typeof api, "appleArcadeGames">["games"][number];
 type AccountData = ApiResponse<typeof api, "getAccounts">;
 type PlatformStatus = AccountData["platforms"][number];
 type LibraryGroup = ApiResponse<typeof api, "listLibrary">["groups"][number];
@@ -1931,6 +1933,249 @@ function SearchClearButton({ onClear }: { onClear: () => void }) {
   );
 }
 
+// ---------- App 页三个板块：限免情报 / App Store 排行榜 / Apple Arcade ----------
+
+const APP_SUB_TABS = [
+  { key: "free", label: "限免情报" },
+  { key: "ranking", label: "排行榜" },
+  { key: "arcade", label: "Arcade" },
+] as const;
+type AppSubTab = (typeof APP_SUB_TABS)[number]["key"];
+
+const RANK_REGIONS = [
+  { cc: "cn", label: "国区" },
+  { cc: "us", label: "美区" },
+  { cc: "jp", label: "日区" },
+  { cc: "hk", label: "港区" },
+  { cc: "in", label: "印度区" },
+];
+// App Store 官方游戏分类 ID（iTunes RSS genre）。6014 = 游戏总榜。
+const RANK_GAME_GENRES = [
+  { id: 6014, label: "全部游戏" },
+  { id: 7001, label: "动作" },
+  { id: 7002, label: "冒险" },
+  { id: 7003, label: "街机" },
+  { id: 7004, label: "棋盘" },
+  { id: 7005, label: "卡牌" },
+  { id: 7012, label: "益智" },
+  { id: 7013, label: "竞速" },
+  { id: 7014, label: "角色扮演" },
+  { id: 7015, label: "模拟" },
+  { id: 7016, label: "体育" },
+  { id: 7017, label: "策略" },
+  { id: 7019, label: "文字" },
+];
+const ARCADE_KINDS = [
+  { key: "all", label: "全部" },
+  { key: "Arcade 原创", label: "原创" },
+  { key: "App Store Greats", label: "Greats" },
+  { key: "Arcade 版", label: "Arcade 版" },
+];
+
+function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={`flex-none whitespace-nowrap rounded-full border px-2.5 py-[5px] text-[10.5px] font-medium leading-none transition-colors ${
+        active
+          ? "border-transparent bg-grad font-bold text-[var(--accent-ink)]"
+          : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function FilterRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="mt-2.5 flex items-center gap-2">
+      <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">{label}</span>
+      <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{children}</div>
+    </div>
+  );
+}
+
+function RankRow({ app }: { app: RankingApp }) {
+  return (
+    <a
+      href={app.storeUrl ?? "#"}
+      target="_blank"
+      rel="noreferrer"
+      className="flex items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70"
+    >
+      <span className="w-6 flex-none text-center font-mono text-[13px] font-black text-[var(--dim2)]">{app.rank}</span>
+      {app.iconUrl ? (
+        <img src={app.iconUrl} alt="" loading="lazy" className="h-12 w-12 flex-none rounded-[12px] bg-[var(--surface2)] object-cover" />
+      ) : (
+        <div className="h-12 w-12 flex-none rounded-[12px] bg-[var(--surface2)]" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-bold text-[var(--text)]">{app.name}</div>
+        <div className="mt-0.5 truncate text-[10px] text-[var(--dim)]">{[app.sellerName, app.genre].filter(Boolean).join(" · ")}</div>
+      </div>
+      <div className="flex-none text-right">
+        <div className="text-[11px] font-bold text-[var(--accent)]">{app.price || "免费"}</div>
+        <div className="font-mono text-[9px] text-[var(--dim2)]">商店 ↗</div>
+      </div>
+    </a>
+  );
+}
+
+function RankingBoard({ initialRegion }: { initialRegion: string }) {
+  const [cc, setCc] = useState(() => (initialRegion === "all" ? "cn" : initialRegion));
+  const [kind, setKind] = useState<"apps" | "games">("apps");
+  const [chart, setChart] = useState<"free" | "paid">("free");
+  const [genre, setGenre] = useState(6014);
+  const regionLabel = RANK_REGIONS.find((r) => r.cc === cc)?.label ?? cc.toUpperCase();
+  const genreLabel = RANK_GAME_GENRES.find((g) => g.id === genre)?.label ?? "游戏";
+  const query = useQuery({
+    queryKey: ["appRanking", cc, kind, chart, kind === "games" ? genre : 0],
+    queryFn: () =>
+      api.appStoreRanking({
+        country: cc,
+        kind,
+        chart,
+        genre: kind === "games" ? genre : undefined,
+        limit: 50,
+      }),
+    staleTime: 10 * 60_000,
+  });
+  const apps = query.data?.apps ?? [];
+  return (
+    <div className="pb-2" data-board="ranking">
+      <SectionHead
+        no="01"
+        title={`${regionLabel} · ${kind === "games" ? genreLabel : "App 总榜"}`}
+        en={`TOP ${chart === "free" ? "FREE" : "PAID"} · ${cc.toUpperCase()}`}
+      />
+      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+        Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点击条目打开该区商店页
+      </p>
+      <FilterRow label="区服">
+        {RANK_REGIONS.map((r) => (
+          <FilterChip key={r.cc} active={cc === r.cc} onClick={() => setCc(r.cc)}>{r.label}</FilterChip>
+        ))}
+      </FilterRow>
+      <FilterRow label="内容">
+        <FilterChip active={kind === "apps"} onClick={() => setKind("apps")}>软件</FilterChip>
+        <FilterChip active={kind === "games"} onClick={() => setKind("games")}>游戏</FilterChip>
+      </FilterRow>
+      <FilterRow label="榜单">
+        <FilterChip active={chart === "free"} onClick={() => setChart("free")}>免费榜</FilterChip>
+        <FilterChip active={chart === "paid"} onClick={() => setChart("paid")}>付费榜</FilterChip>
+      </FilterRow>
+      {kind === "games" ? (
+        <FilterRow label="种类">
+          {RANK_GAME_GENRES.map((g) => (
+            <FilterChip key={g.id} active={genre === g.id} onClick={() => setGenre(g.id)}>{g.label}</FilterChip>
+          ))}
+        </FilterRow>
+      ) : null}
+      {query.isPending ? (
+        <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取{regionLabel}榜单…</p>
+      ) : query.isError ? (
+        <EmptyNote title="榜单暂时读不到" sub="Apple 接口没响应或网络超时，稍后重试；切回「限免情报」不受影响。" />
+      ) : apps.length === 0 ? (
+        <EmptyNote title="这个组合暂时没有数据" sub="换个区服、免费/付费，或换一个游戏种类看看。" />
+      ) : (
+        <div className="mt-3 flex flex-col gap-[9px]">
+          {apps.map((a) => <RankRow key={`${a.trackId}-${a.rank}`} app={a} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ArcadeRow({ game }: { game: ArcadeGame }) {
+  const date = game.releaseDate ? String(game.releaseDate).slice(0, 10) : "";
+  return (
+    <a
+      href={game.storeUrl ?? "#"}
+      target="_blank"
+      rel="noreferrer"
+      className="flex items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70"
+    >
+      {game.iconUrl ? (
+        <img src={game.iconUrl} alt="" loading="lazy" className="h-14 w-14 flex-none rounded-[13px] bg-[var(--surface2)] object-cover" />
+      ) : (
+        <div className="h-14 w-14 flex-none rounded-[13px] bg-[var(--surface2)]" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-bold text-[var(--text)]">{game.name}</div>
+        <div className="mt-0.5 truncate text-[10px] text-[var(--dim)]">{[game.sellerName, game.genre].filter(Boolean).join(" · ")}</div>
+        <div className="mt-1 flex items-center gap-1.5">
+          <span className="rounded-full bg-[var(--surface2)] px-2 py-[2px] font-mono text-[9px] text-[var(--accent)]">{game.arcadeKind}</span>
+          {date ? <span className="font-mono text-[9px] text-[var(--dim2)]">{date}</span> : null}
+        </div>
+      </div>
+      <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">商店 ↗</span>
+    </a>
+  );
+}
+
+function ArcadeBoard() {
+  const [q, setQ] = useState("");
+  const [kind, setKind] = useState("all");
+  const query = useQuery({
+    queryKey: ["arcadeGames"],
+    queryFn: () => api.appleArcadeGames({}),
+    staleTime: 6 * 60 * 60_000,
+  });
+  const games = query.data?.games ?? [];
+  const shown = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    return games.filter(
+      (g) =>
+        (kind === "all" || g.arcadeKind === kind) &&
+        (!t || g.name.toLowerCase().includes(t) || (g.sellerName ?? "").toLowerCase().includes(t)),
+    );
+  }, [games, kind, q]);
+  return (
+    <div className="pb-2" data-board="arcade">
+      <SectionHead no="01" title="Apple Arcade 游戏清单" en={`ARCADE · ${query.data?.total ?? 0} GAMES`} />
+      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+        国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。
+      </p>
+      <a
+        href="https://apps.apple.com/arcade"
+        target="_blank"
+        rel="noreferrer"
+        className="mt-2 inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 py-1.5 text-[10.5px] font-bold text-[var(--text)]"
+      >
+        打开 App Store Arcade 专区 ↗
+      </a>
+      <div className="relative mt-3">
+        <input
+          aria-label="搜索 Arcade 游戏"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜索游戏名或开发者"
+          className="w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] px-3.5 py-2.5 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]"
+        />
+      </div>
+      <FilterRow label="类型">
+        {ARCADE_KINDS.map((k) => (
+          <FilterChip key={k.key} active={kind === k.key} onClick={() => setKind(k.key)}>{k.label}</FilterChip>
+        ))}
+      </FilterRow>
+      {query.isPending ? (
+        <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取 Arcade 清单…</p>
+      ) : query.isError ? (
+        <EmptyNote title="Arcade 清单暂时读不到" sub="Apple 接口没响应或网络超时，稍后重试。" />
+      ) : shown.length === 0 ? (
+        <EmptyNote title="没有匹配的游戏" sub="换个关键词，或把类型切回「全部」。" />
+      ) : (
+        <div className="mt-3 flex flex-col gap-[9px]">
+          {shown.map((g) => <ArcadeRow key={g.trackId} game={g} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AppsPage({
   deals,
   now,
@@ -1947,6 +2192,7 @@ function AppsPage({
   authToken?: string;
 }) {
   const [chip, setChip] = useState<"all" | "free" | "iap" | "drop" | "watch">("all");
+  const [subTab, setSubTab] = useState<AppSubTab>("free");
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -2150,6 +2396,27 @@ function AppsPage({
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
       </div>
+      <div className="mt-3 flex gap-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] p-1" data-app-subtabs>
+        {APP_SUB_TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            aria-pressed={subTab === t.key}
+            onClick={() => setSubTab(t.key)}
+            className={`flex-1 rounded-[10px] py-2 text-[11.5px] font-bold leading-none transition-colors ${
+              subTab === t.key ? "bg-grad text-[var(--accent-ink)]" : "text-[var(--dim)]"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {subTab === "ranking" ? (
+        <RankingBoard initialRegion={region} />
+      ) : subTab === "arcade" ? (
+        <ArcadeBoard />
+      ) : (
+        <>
       <ChipsRow label="应用筛选">
         {/* 五个 chip 要在 390px 宽里排得下：标签用短名，全称放 aria-label
             和下面的区块标题里，横滑不必用户自己发现。 */}
@@ -2352,6 +2619,8 @@ function AppsPage({
           </p>
         </>
       ) : null}
+        </>
+      )}
     </div>
   );
 }
