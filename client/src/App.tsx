@@ -2024,7 +2024,7 @@ function RankRow({ app }: { app: RankingApp }) {
   );
 }
 
-function RankingBoard({ initialRegion }: { initialRegion: string }) {
+function RankingBoard({ initialRegion, tabs }: { initialRegion: string; tabs?: ReactNode }) {
   const [cc, setCc] = useState(() => (initialRegion === "all" ? "cn" : initialRegion));
   const [kind, setKind] = useState<"apps" | "games">("apps");
   const [chart, setChart] = useState<"free" | "paid">("free");
@@ -2045,12 +2045,13 @@ function RankingBoard({ initialRegion }: { initialRegion: string }) {
   });
   const apps = query.data?.apps ?? [];
   return (
-    <div className="pb-2" data-board="ranking">
+    <div className="mt-5 pb-2" data-board="ranking">
       <SectionHead
         no="01"
         title={`${regionLabel} · ${kind === "games" ? genreLabel : "App 总榜"}`}
         en={`TOP ${chart === "free" ? "FREE" : "PAID"} · ${cc.toUpperCase()}`}
       />
+      {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
         Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点击条目打开该区商店页
       </p>
@@ -2116,7 +2117,7 @@ function ArcadeRow({ game }: { game: ArcadeGame }) {
   );
 }
 
-function ArcadeBoard() {
+function ArcadeBoard({ tabs }: { tabs?: ReactNode }) {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const query = useQuery({
@@ -2134,8 +2135,9 @@ function ArcadeBoard() {
     );
   }, [games, kind, q]);
   return (
-    <div className="pb-2" data-board="arcade">
+    <div className="mt-5 pb-2" data-board="arcade">
       <SectionHead no="01" title="Apple Arcade 游戏清单" en={`ARCADE · ${query.data?.total ?? 0} GAMES`} />
+      {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
         国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。
       </p>
@@ -2386,9 +2388,34 @@ function AppsPage({
   const showFreeSec = chip === "free" || chip === "all" || (watchMode && freeList.length > 0);
   const showIapSec = chip === "iap" || chip === "all" || (watchMode && iapList.length > 0);
   const showDropSec = chip === "drop" || chip === "all" || (watchMode && dropList.length > 0);
-  const noFree = "01";
-  const noIap = showFreeSec ? "02" : "01";
-  const noDrop = showFreeSec ? (showIapSec ? "03" : "02") : showIapSec ? "02" : "01";
+  // 板块切换条要落在每个板块的「01 / xxx」标题之下，所以由父级生成、各板块
+  // 自己插到标题后面；否则它会变成压在标题上方的第二条横条。
+  const subTabsRow = (
+    <div
+      role="group"
+      aria-label="应用板块切换"
+      data-app-subtabs
+      className="mb-1 mt-1 flex gap-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] p-1"
+    >
+      {APP_SUB_TABS.map((t) => (
+        <button
+          key={t.key}
+          type="button"
+          aria-pressed={subTab === t.key}
+          onClick={() => setSubTab(t.key)}
+          className={`flex-1 rounded-[10px] py-2 text-[11.5px] font-bold leading-none transition-colors ${
+            subTab === t.key ? "bg-grad text-[var(--accent-ink)]" : "text-[var(--dim)]"
+          }`}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+  // 「01」留给板块页头，内部区块从 02 起编号。
+  const noFree = "02";
+  const noIap = showFreeSec ? "03" : "02";
+  const noDrop = showFreeSec ? (showIapSec ? "04" : "03") : showIapSec ? "03" : "02";
 
   return (
     <div>
@@ -2396,27 +2423,14 @@ function AppsPage({
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
       </div>
-      <div className="mt-3 flex gap-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] p-1" data-app-subtabs>
-        {APP_SUB_TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            aria-pressed={subTab === t.key}
-            onClick={() => setSubTab(t.key)}
-            className={`flex-1 rounded-[10px] py-2 text-[11.5px] font-bold leading-none transition-colors ${
-              subTab === t.key ? "bg-grad text-[var(--accent-ink)]" : "text-[var(--dim)]"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
       {subTab === "ranking" ? (
-        <RankingBoard initialRegion={region} />
+        <RankingBoard initialRegion={region} tabs={subTabsRow} />
       ) : subTab === "arcade" ? (
-        <ArcadeBoard />
+        <ArcadeBoard tabs={subTabsRow} />
       ) : (
-        <>
+        <div className="mt-5">
+      <SectionHead no="01" title="限免情报" en="IOS APP FREEBIES" />
+      {subTabsRow}
       <ChipsRow label="应用筛选">
         {/* 五个 chip 要在 390px 宽里排得下：标签用短名，全称放 aria-label
             和下面的区块标题里，横滑不必用户自己发现。 */}
@@ -2608,7 +2622,7 @@ function AppsPage({
       {/* 全库搜索结果关注的 App：不是 deal，单独一组回看。 */}
       {watchMode && watchStore.length > 0 ? (
         <>
-          <SectionHead no="04" title="关注的应用" en="WATCHED · APP STORE" />
+          <SectionHead no="05" title="关注的应用" en="WATCHED · APP STORE" />
           <div className="flex flex-col gap-[9px]">
             {watchStore.map((a) => (
               <StoreRow key={a.trackId} app={a} watched onToggleWatch={toggleStoreWatch} />
@@ -2619,7 +2633,7 @@ function AppsPage({
           </p>
         </>
       ) : null}
-        </>
+        </div>
       )}
     </div>
   );

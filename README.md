@@ -37,6 +37,8 @@
 
 | 18 | **APP 页三个切换板块：限免情报 / 排行榜 / Apple Arcade** | 应用页顶部新增三个切换页。① **限免情报**＝原 APP 页全部内容，一行未改（筛选 chips、全库搜索、区服、关注照旧）。② **排行榜**：按区服（国 / 美 / 日 / 港 / 印度）、内容（软件 / 游戏）、榜单（免费 / 付费）切换，游戏额外支持 13 个 App Store 官方分类（动作 / 冒险 / 街机 / 棋盘 / 卡牌 / 益智 / 竞速 / 角色扮演 / 模拟 / 体育 / 策略 / 文字）。数据源用 Apple **v1 iTunes RSS**（`itunes.apple.com/{cc}/rss/{topfree\|toppaid}applications/limit=N[/genre=G]/json`）：实测 Marketing Tools v2 的 `?genre=` 参数不生效（带 6014 仍返回 TikTok / ChatGPT 总榜），而 v1 支持任意 genre 且五个区服都正常，价格按区本地化（¥ / Get / 取得 / ¥2,000）。服务端 `appStoreRanking` 按「区服+类型+榜单+分类」缓存 10 分钟、抓不到时保留上次好数据。③ **Apple Arcade**：无官方清单 API —— `apps.apple.com/arcade` 与官方 story 页在国区都被重定向到 Today（**国区 App Store 未上线 Arcade**），iTunes 元数据也没有 arcade 标记；改为聚合 Apple 官方 Search API 的三个 Arcade 相关检索词，用「无独立售价」精确筛出只能订阅获取的游戏（Arcade 游戏 `formattedPrice`/`price` 均缺失，普通免费游戏返回 `Free`/`0`），标注 `Arcade 原创 / App Store Greats / Arcade 版` 三类，按发行日倒序，实测 188 款，缓存 6 小时。UI 提供搜索、类型筛选、官方 Arcade 专区入口，并明确标注国区不可用。实测：三个 tab 切换、排行榜 5 组筛选（含换区）、Arcade 搜索与类型筛选全部通过，零 JS/网络错误。属前端 + 服务端改动，**服务端已即时生效，但三个新板块必须出新 IPA 才能在 App 里看到**。 |
 
+| 19 | **板块切换条移到「01 / xxx」标题下方** | 反馈「三个切换页和 01/xxx 标题重叠了」。原因：切换条只有 `mt-3`、没有下边距，而板块的 `SectionHead` 是板块根节点的 `:first-child`，`first:mt-0` 让它的上边距归零 —— 于是标题紧贴切换条底边，`leading-none` 的中文衬线字形向上溢出，看起来被切换条「吃掉」了半截。改法：切换条改为由 `AppsPage` 生成、以 `tabs` prop 传给 `RankingBoard` / `ArcadeBoard`，各自插在自己的 `SectionHead` 之后；「限免情报」补一个板块页头 `01 / 限免情报`（`IOS APP FREEBIES`），让三个板块结构一致，内部区块编号顺延为 02 本体 / 03 内购 / 04 降价 / 05 关注。切换条本身加 `mt-1 mb-1`，与标题固定 14px 间距。实测三个板块：标题底 87px → 切换条顶 101px，间距 14px，无重叠、无裁切。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
