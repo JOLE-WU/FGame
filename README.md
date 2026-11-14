@@ -31,6 +31,8 @@
 
 | 15 | **全页下拉刷新** | 五个 tab 通用：页面顶部单指下拉出现胶囊指示器（`下拉刷新 → 松开立即刷新 → 正在刷新… → 已更新 · HH:MM`），内容随手指下移，松手后重新拉取当前页所有 active query（deals / appPrices / library / 搜索结果等），完成后回弹。实现要点：① 独立 iOS WKWebView 里滚动的是 `window`，而 WorkBuddy 空间外壳会把 `[data-generated-space-root]` 钉成固定滚动层，故 `onStart` 同时检查 `window.scrollY` / `documentElement.scrollTop` / `scroller.scrollTop`，避免滚到页面中段误触发（实测该层在独立包里 `scrollHeight === clientHeight`，只看它会恒为 0）；② 触摸移动直接写 DOM `transform/opacity`，不每帧 setState 重渲染整棵树；③ 有 `[role=dialog]` 弹窗（详情右滑返回、Prime 队列、一键入库）或起点在输入框内时不接管，横向拖动按 `dy < |dx| * 1.1` 让回浏览器（chip 行/截图画廊照常横滑，但 masthead 正下方就是 chip 行，不能整块排除）；④ `overscroll-behavior: none` + `passive:false` 的 touchmove `preventDefault` 压住 iOS 橡皮筋。全量源同步仍由日报页右上角 ↻ 负责（可能耗时数十秒，不适合挂在手指下）。CDP 真触摸验证：下拉/阈值/刷新/「已更新」/回弹全通过，横向拖动、非顶部、弹窗内三类负例均不触发。 |
 
+| 16 | **打开 App 页面无法加载：服务自愈 + 容器级自启** | 11/14 反馈「打开 App 页面无法加载」。逐层排查：服务 3000 与公网 `?sharecode=` 链路、OPTIONS 预检（204 / CORS `*`）、证书（有效至 2027-03）、前端五个 tab 全部正常渲染且零 JS/网络错误，IPA 内 `index.html` 与 bundle 引用一致、硬编码 origin/sharecode 正确 —— 唯一异常是**守护进程 watchdog 没在运行**（日志停在 11/13），服务是当天 10:26 才被会话拉起，沙箱休眠/恢复后的空窗期 App 就会白屏或一直转圈。修复：① 注册 supervisord 自启项 `scripts/fgame-supervisor.conf`（`autostart=true`，容器重建时自动拉起 watchdog），`scripts/install-autostart.sh` 负责安装；② watchdog 每轮 `ensure_autostart` 检测运行时目录里的配置丢失即补回，防止 `_run` 目录在沙箱恢复时被重建清空；③ watchdog 加 `flock` 单例锁，并给三处 `setsid` 子循环加 `9>&-` **关闭锁 fd 继承** —— 否则旧守护被杀后子循环仍持有 fd 9，新实例永远抢不到锁而静默退出（实测已修）。回归：删除自启配置后守护在 30s 内自动补回且逐字节一致；watchdog 存活、IAP 扫描与 Epic 快照循环均在，公网 `listDeals` 返回 176 条。属纯服务端/运维修复，**不需要出包**。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
