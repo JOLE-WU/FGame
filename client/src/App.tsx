@@ -541,7 +541,7 @@ const MiniRow = memo(function MiniRow({
                 : cd
                   ? cd.text
                   : deal.tags.includes("iap")
-                    ? "内购 0 元"
+                    ? "可领取"
                     : deal.externalId.startsWith("iosfree-")
                       ? "限免中"
                       : "长期"}
