@@ -122,6 +122,12 @@ export function createActionClient<M>(): ClientOf<M> {
     "verifyBatchClaim",
   ]);
   const SLOW_TIMEOUT_MS = 120_000;
+  // The published backend is a mainland-China endpoint (Tencent Cloud CLB).
+  // A device-wide proxy/VPN routes it through an overseas exit, where it is
+  // unreachable — the user sees a bare "加载失败" with no idea why. Surface
+  // the actionable fix in the error itself (now shown on the retry card).
+  const NETWORK_HINT =
+    "如果设备开启了网络代理 / VPN，请把 *.workbuddy.host 加入直连（DIRECT）规则，或暂时关闭代理后重试；本服务部署在国内，走境外代理常会超时或被拦截。";
   const call = async (action: string, args: unknown): Promise<unknown> => {
     const limit = SLOW_ACTIONS.has(action) ? SLOW_TIMEOUT_MS : TIMEOUT_MS;
     let res: Response;
@@ -139,11 +145,11 @@ export function createActionClient<M>(): ClientOf<M> {
       const name = e instanceof Error ? e.name : "";
       if (name === "TimeoutError" || name === "AbortError") {
         throw new ActionError(
-          `连接 FGame 服务超时（${Math.round(limit / 1000)} 秒无响应），请检查网络后重试。`,
+          `连接 FGame 服务超时（${Math.round(limit / 1000)} 秒无响应）。${NETWORK_HINT}`,
         );
       }
       throw new ActionError(
-        `无法连接 FGame 服务（${API_BASE || "当前站点"}）：${e instanceof Error ? e.message : String(e)}`,
+        `无法连接 FGame 服务（${API_BASE || "当前站点"}）：${e instanceof Error ? e.message : String(e)}。${NETWORK_HINT}`,
       );
     }
     const raw = await res.text().catch(() => "");
@@ -151,7 +157,10 @@ export function createActionClient<M>(): ClientOf<M> {
     try {
       body = raw ? (JSON.parse(raw) as typeof body) : {};
     } catch {
-      throw new ActionError(`服务返回了非 JSON 内容（HTTP ${res.status}）`, res.status);
+      throw new ActionError(
+        `服务返回了非 JSON 内容（HTTP ${res.status}），多是代理/VPN 返回了拦截页。${NETWORK_HINT}`,
+        res.status,
+      );
     }
     if (!res.ok || body.ok === false) {
       throw new ActionError(body.error || `请求失败（HTTP ${res.status}）`, res.status);

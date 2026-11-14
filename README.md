@@ -33,6 +33,8 @@
 
 | 16 | **打开 App 页面无法加载：服务自愈 + 容器级自启** | 11/14 反馈「打开 App 页面无法加载」。逐层排查：服务 3000 与公网 `?sharecode=` 链路、OPTIONS 预检（204 / CORS `*`）、证书（有效至 2027-03）、前端五个 tab 全部正常渲染且零 JS/网络错误，IPA 内 `index.html` 与 bundle 引用一致、硬编码 origin/sharecode 正确 —— 唯一异常是**守护进程 watchdog 没在运行**（日志停在 11/13），服务是当天 10:26 才被会话拉起，沙箱休眠/恢复后的空窗期 App 就会白屏或一直转圈。修复：① 注册 supervisord 自启项 `scripts/fgame-supervisor.conf`（`autostart=true`，容器重建时自动拉起 watchdog），`scripts/install-autostart.sh` 负责安装；② watchdog 每轮 `ensure_autostart` 检测运行时目录里的配置丢失即补回，防止 `_run` 目录在沙箱恢复时被重建清空；③ watchdog 加 `flock` 单例锁，并给三处 `setsid` 子循环加 `9>&-` **关闭锁 fd 继承** —— 否则旧守护被杀后子循环仍持有 fd 9，新实例永远抢不到锁而静默退出（实测已修）。回归：删除自启配置后守护在 30s 内自动补回且逐字节一致；watchdog 存活、IAP 扫描与 Epic 快照循环均在，公网 `listDeals` 返回 176 条。属纯服务端/运维修复，**不需要出包**。 |
 
+| 17 | **开代理/VPN 加载失败：可诊断的错误提示** | 用户反馈「开了代理加载失败，但代理联网正常」。排查确认：公网服务部署在腾讯云北京 CLB（`49.233.240.214`），服务端对 `X-Forwarded-For` / `Via` 等代理特征头、HTTP/1.1 降级、CORS 预检均正常响应（200 / 204），说明请求根本没到服务端 —— 设备全局代理把国内域名路由到境外出口后不可达，属于客户端网络环境问题，服务端无法修复。但原「加载失败」卡片**只显示标题 + 重试按钮，不显示错误原因**，用户无从判断。改动：① `App.tsx` 重试卡片透出 `dealsQuery.error.message`；② `sdk-shim.tsx` 在 fetch 失败 / 超时 / 返回非 JSON（代理拦截页）三类错误里追加可操作提示「若开启代理 / VPN，请把 `*.workbuddy.host` 加入直连（DIRECT）规则或暂时关闭代理；本服务部署在国内，走境外代理常超时或被拦截」。断网模拟实测 2 秒内显示完整提示。用户侧规则示例：Clash `DOMAIN-SUFFIX,workbuddy.host,DIRECT`；Surge / Shadowrocket `DOMAIN-SUFFIX,workbuddy.host,DIRECT`；Quantumult X `host-suffix, workbuddy.host, direct`。纯前端改动，Web 立即生效，装在 IPA 里需出包。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 

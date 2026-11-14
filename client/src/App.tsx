@@ -6155,6 +6155,11 @@ export function App() {
         ) : dealsQuery.error ? (
           <div className="mt-6 rounded-[16px] border border-[var(--glass-edge)] bg-[var(--surface)] shadow-[var(--glass-hi)] backdrop-blur-md p-6 text-center">
             <p className="text-sm font-semibold text-[var(--warn)]">加载失败</p>
+            <p className="mt-3 text-left text-xs leading-relaxed text-[var(--dim)]">
+              {dealsQuery.error instanceof Error
+                ? dealsQuery.error.message
+                : String(dealsQuery.error ?? "请检查网络后重试")}
+            </p>
             <button type="button" aria-label="重试加载" onClick={() => dealsQuery.refetch()} className="mt-4 bg-grad px-5 py-2.5 text-sm font-bold text-[var(--accent-ink)]">重试</button>
           </div>
         ) : tab === "today" ? (
