@@ -29,9 +29,7 @@ type AppPrice = ApiResponse<typeof api, "listAppPrices">["apps"][number];
 type StoreApp = ApiResponse<typeof api, "searchAppStore">["apps"][number];
 type RankingApp = ApiResponse<typeof api, "appStoreRanking">["apps"][number];
 type ArcadeGame = ApiResponse<typeof api, "appleArcadeGames">["games"][number];
-type FreeHistoryData = ApiResponse<typeof api, "freeHistory">;
-type FreeHistoryApp = FreeHistoryData["apps"][number];
-type FreeHistoryDay = FreeHistoryData["days"][number];
+type AppStoreDetailData = ApiResponse<typeof api, "appStoreDetail">;
 type AccountData = ApiResponse<typeof api, "getAccounts">;
 type PlatformStatus = AccountData["platforms"][number];
 type LibraryGroup = ApiResponse<typeof api, "listLibrary">["groups"][number];
@@ -801,6 +799,11 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
 
   const dealId = deal.id;
   const isGameOrApp = deal.tags.includes("game") || deal.tags.includes("ios");
+  // iOS 限免条目改用「App Store 官方资料」区块统一承载介绍与截图，
+  // 避免与下面原来的「应用介绍 / 简介」两段重复。
+  const isIosFreeApp = deal.appStore === true && /^ios(?:free|iap)-/.test(deal.externalId);
+  const iosTrackId = isIosFreeApp ? iosDealTrackId(deal) : null;
+  const iosCountry = /apps\.apple\.com\/([a-z]{2})\//i.exec(deal.claimUrl ?? "")?.[1] ?? "us";
   const needsEnrich = isGameOrApp && (deal.gallery.length === 0 || !deal.aboutZh);
   useEffect(() => {
     if (!needsEnrich || enrichAttempted.has(dealId)) return;
@@ -1047,14 +1050,25 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
           ) : null}
         </dl>
 
-        {intro ? (
+        <AppPriceHistory deal={deal} />
+
+        {isIosFreeApp ? (
+          <AppStoreProfile
+            trackId={iosTrackId}
+            country={iosCountry}
+            introZh={deal.aboutZh?.trim() || deal.descriptionZh?.trim() || ""}
+            fallbackImages={deal.gallery}
+          />
+        ) : null}
+
+        {intro && !isIosFreeApp ? (
           <section className="mt-6">
             <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">{introHeading}</h2>
             <p className="mt-2 whitespace-pre-line text-sm leading-[1.7] text-[var(--dim)]">{intro}</p>
           </section>
         ) : null}
 
-        {desc && desc !== intro ? (
+        {desc && desc !== intro && !isIosFreeApp ? (
           <section className="mt-6">
             <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">简介</h2>
             <p className="mt-2 whitespace-pre-line text-sm leading-[1.7] text-[var(--dim)]">{desc}</p>
@@ -2019,7 +2033,6 @@ const APP_SUB_TABS = [
   { key: "free", label: "限免情报" },
   { key: "ranking", label: "排行榜" },
   { key: "arcade", label: "Arcade" },
-  { key: "history", label: "历史限免" },
 ] as const;
 type AppSubTab = (typeof APP_SUB_TABS)[number]["key"];
 
@@ -2266,6 +2279,8 @@ function RankingDetail({
           ))}
         </dl>
 
+        <AppStoreProfile trackId={app.trackId} country={meta.cc} />
+
         <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
           数据来自 Apple 官方 App Store 榜单，每 10 分钟更新。榜单条目不是本站收录的限免信息，点下方按钮前往该区商店查看完整介绍与下载。
         </p>
@@ -2386,6 +2401,8 @@ function ArcadeDetail({
             </div>
           ))}
         </dl>
+
+        <AppStoreProfile trackId={game.trackId} country="us" />
 
         <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
           国区 App Store 未上线 Apple Arcade，本清单按美区整理；需订阅 Apple Arcade 后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。点下方按钮前往商店查看完整介绍。
@@ -2634,174 +2651,234 @@ function fmtCents(cents: number, currency = "USD"): string {
   return `${sym}${(cents / 100).toFixed(2).replace(/\.00$/, "")}`;
 }
 
-/** 全站每日趋势：限免数 / 新增·结束双线。纯 SVG，无图表库。 */
-function TrendChart({ days, metric }: { days: FreeHistoryDay[]; metric: "free" | "flow" }) {
-  if (days.length === 0) return null;
-  const W = 320, H = 118, PL = 10, PR = 10, PT = 14, PB = 20;
-  const n = days.length;
-  const px = (i: number) => PL + (n <= 1 ? 0 : (i * (W - PL - PR)) / (n - 1));
-  const series =
-    metric === "free"
-      ? [{ key: "free", label: "限免中", values: days.map((d) => d.free), color: "var(--free-ink)" }]
-      : [
-          { key: "new", label: "新限免", values: days.map((d) => d.newFree), color: "var(--free-ink)" },
-          { key: "end", label: "已结束", values: days.map((d) => d.endedFree), color: "var(--dim2)" },
-        ];
-  const maxV = Math.max(1, ...series.flatMap((sr) => sr.values));
-  const py = (v: number) => PT + (1 - v / maxV) * (H - PT - PB);
-  const area =
-    `M ${px(0)} ${py(series[0]!.values[0]!)} ` +
-    series[0]!.values.map((v, i) => `L ${px(i)} ${py(v)}`).join(" ") +
-    ` L ${px(n - 1)} ${H - PB} L ${px(0)} ${H - PB} Z`;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 118 }} role="img" aria-label="每日限免 App 数量趋势">
-      {[0.25, 0.75].map((f) => (
-        <line key={f} x1={PL} x2={W - PR} y1={PT + f * (H - PT - PB)} y2={PT + f * (H - PT - PB)} stroke="var(--border)" strokeWidth={0.6} strokeDasharray="3 4" />
-      ))}
-      {metric === "free" ? <path d={area} fill="var(--free-bg)" /> : null}
-      {series.map((sr) => (
-        <g key={sr.key}>
-          <polyline points={sr.values.map((v, i) => `${px(i)},${py(v)}`).join(" ")} fill="none" stroke={sr.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-          {sr.values.map((v, i) => (
-            <circle key={i} cx={px(i)} cy={py(v)} r={i === n - 1 ? 3 : 1.7} fill={sr.color} />
-          ))}
-        </g>
-      ))}
-      <text x={PL} y={H - 5} fontSize={9} fill="var(--dim2)" fontFamily="monospace">{days[0]!.date.slice(5)}</text>
-      <text x={W - PR} y={H - 5} textAnchor="end" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{days[n - 1]!.date.slice(5)}</text>
-      <text x={W / 2} y={H - 5} textAnchor="middle" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{n} 天观测</text>
-    </svg>
-  );
-}
+/** 曲线上的一个点：inferred 表示「本站收录时标注的原价」，不是每日实测快照。 */
+type PricePoint = { date: string; cents: number; inferred?: boolean };
 
-/** 列表里的迷你价格轨迹：阶梯线 + 免费点绿色。 */
-function Sparkline({ points }: { points: FreeHistoryApp["points"] }) {
-  const W = 88, H = 26, P = 3;
-  if (points.length === 0) return null;
-  const n = points.length;
-  const px = (i: number) => P + (n <= 1 ? 0 : (i * (W - P * 2)) / (n - 1));
-  const max = Math.max(1, ...points.map((p) => p.cents));
-  const py = (c: number) => P + (1 - c / max) * (H - P * 2);
-  let d = `M ${px(0)} ${py(points[0]!.cents)}`;
-  for (let i = 1; i < n; i++) d += ` L ${px(i)} ${py(points[i - 1]!.cents)} L ${px(i)} ${py(points[i]!.cents)}`;
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="flex-none" role="img" aria-label="价格轨迹">
-      <line x1={0} x2={W} y1={py(0)} y2={py(0)} stroke="var(--free-ink)" strokeWidth={0.6} strokeDasharray="2 2" opacity={0.5} />
-      <path d={d} fill="none" stroke="var(--dim2)" strokeWidth={1.3} strokeLinejoin="round" />
-      {points.map((p, i) =>
-        p.cents === 0 ? <circle key={i} cx={px(i)} cy={py(0)} r={1.8} fill="var(--free-ink)" /> : null,
-      )}
-    </svg>
-  );
-}
-
-/** 详情页大图：阶梯价格线，底部绿带标出「免费」区间。 */
-function PriceChart({ app }: { app: FreeHistoryApp }) {
-  const pts = app.points;
-  if (pts.length === 0) return null;
+/** 阶梯价格线：底部绿带是免费区间，实线为每日实测、虚线为收录原价锚点。 */
+function PriceChart({
+  points,
+  currency,
+  name,
+  xLabels,
+}: {
+  points: PricePoint[];
+  currency: string;
+  name: string;
+  xLabels?: { left: string; mid: string; right: string };
+}) {
   const W = 320, H = 146, PL = 12, PR = 12, PT = 18, PB = 28;
-  const n = pts.length;
+  const n = points.length;
+  if (n === 0) return null;
   const px = (i: number) => PL + (n <= 1 ? 0 : (i * (W - PL - PR)) / (n - 1));
-  const max = Math.max(1, ...pts.map((p) => p.cents));
-  const realMax = Math.max(0, ...pts.map((p) => p.cents));
+  const max = Math.max(1, ...points.map((p) => p.cents));
+  const realMax = Math.max(0, ...points.map((p) => p.cents));
   const py = (c: number) => PT + (1 - c / max) * (H - PT - PB);
-  let d = `M ${px(0)} ${py(pts[0]!.cents)}`;
-  for (let i = 1; i < n; i++) d += ` L ${px(i)} ${py(pts[i - 1]!.cents)} L ${px(i)} ${py(pts[i]!.cents)}`;
+  const step = (from: number, to: number) => {
+    let d = `M ${px(from)} ${py(points[from]!.cents)}`;
+    for (let i = from + 1; i <= to; i++) d += ` L ${px(i)} ${py(points[i - 1]!.cents)} L ${px(i)} ${py(points[i]!.cents)}`;
+    return d;
+  };
+  const firstReal = points.findIndex((p) => !p.inferred);
+  const cut = firstReal < 0 ? n - 1 : firstReal;
+  const dashed = cut > 0 ? step(0, cut) : null;
+  const solid = firstReal >= 0 && cut < n - 1 ? step(cut, n - 1) : null;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 146 }} role="img" aria-label={`${app.name} 历史价格曲线`}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 146 }} role="img" aria-label={`${name} 历史价格曲线`}>
       <rect x={PL} y={py(0) - 4} width={W - PL - PR} height={8} rx={4} fill="var(--free-bg)" />
       <line x1={PL} x2={W - PR} y1={py(0)} y2={py(0)} stroke="var(--free-ink)" strokeWidth={0.7} strokeDasharray="3 3" opacity={0.7} />
-      <path d={d} fill="none" stroke="var(--text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-      {pts.map((p, i) => (
-        <circle key={i} cx={px(i)} cy={py(p.cents)} r={i === n - 1 ? 3.4 : 2.2} fill={p.cents === 0 ? "var(--free-ink)" : "var(--accent)"} />
+      {dashed ? <path d={dashed} fill="none" stroke="var(--dim2)" strokeWidth={1.8} strokeDasharray="4 3" strokeLinejoin="round" /> : null}
+      {solid ? <path d={solid} fill="none" stroke="var(--text)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" /> : null}
+      {points.map((p, i) => (
+        <circle
+          key={i}
+          cx={px(i)}
+          cy={py(p.cents)}
+          r={i === n - 1 ? 3.4 : 2.2}
+          fill={p.inferred ? "var(--surface)" : p.cents === 0 ? "var(--free-ink)" : "var(--accent)"}
+          stroke={p.inferred ? "var(--dim2)" : "none"}
+          strokeWidth={p.inferred ? 1.3 : 0}
+        />
       ))}
-      <text x={PL} y={12} fontSize={9} fill="var(--dim2)" fontFamily="monospace">最高 {fmtCents(realMax, app.currency)}</text>
-      <text x={W - PR} y={12} textAnchor="end" fontSize={9} fill="var(--free-ink)" fontFamily="monospace">免费线</text>
-      {realMax === 0 ? (
-        <text x={W / 2} y={H / 2} textAnchor="middle" fontSize={10} fill="var(--dim2)" fontFamily="monospace">观测期内始终免费</text>
-      ) : null}
-      <text x={PL} y={H - 7} fontSize={9} fill="var(--dim2)" fontFamily="monospace">{pts[0]!.date.slice(5)}</text>
-      <text x={W - PR} y={H - 7} textAnchor="end" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{pts[n - 1]!.date.slice(5)}</text>
-      <text x={W / 2} y={H - 7} textAnchor="middle" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{n} 个观测点</text>
+      <text x={PL} y={12} fontSize={9} fill="var(--dim2)" fontFamily="monospace">最高 {fmtCents(realMax, currency)}</text>
+      {realMax === 0 ? <text x={W / 2} y={H / 2} textAnchor="middle" fontSize={10} fill="var(--dim2)" fontFamily="monospace">观测期内始终免费</text> : null}
+      <text x={PL} y={H - 7} fontSize={9} fill="var(--dim2)" fontFamily="monospace">{xLabels?.left ?? points[0]!.date.slice(5)}</text>
+      <text x={W - PR} y={H - 7} textAnchor="end" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{xLabels?.right ?? points[n - 1]!.date.slice(5)}</text>
+      <text x={W / 2} y={H - 7} textAnchor="middle" fontSize={9} fill="var(--dim2)" fontFamily="monospace">{xLabels?.mid ?? `${n} 个点`}</text>
     </svg>
   );
 }
 
-/** 单个 App 的历史限免详情：与排行榜 / Arcade 详情同一套交互。 */
-function PriceDetail({
-  app,
-  watched,
-  onToggleWatch,
-  onClose,
+/** 从 iosfree- / iosiap- 条目的 externalId 或领取链接里取 App Store ID。 */
+function iosDealTrackId(deal: Deal): number | null {
+  const m = /^ios(?:free|iap)-(\d+)/.exec(deal.externalId) ?? /\/id(\d+)/.exec(deal.claimUrl ?? "");
+  return m?.[1] ? Number(m[1]) : null;
+}
+
+/** Apple 返回的是 /0x0ss.jpg 原图，列表里换成中等尺寸省流量。 */
+function appShotThumb(u: string): string {
+  return u.replace("/0x0ss.jpg", "/460x0w.jpg");
+}
+function fmtAppBytes(n: number | null): string {
+  if (n == null || n <= 0) return "—";
+  return n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)} GB` : `${(n / 1024 ** 2).toFixed(1)} MB`;
+}
+function fmtAppDate(s: string | null): string {
+  return s ? s.slice(0, 10) : "—";
+}
+
+/**
+ * 三类 App 详情页共用的「App Store 官方资料」：官方大图、完整介绍、评分与规格。
+ * 数据走服务端聚合的 Apple Lookup；接口失败时退回本站已收录的截图与中文介绍，
+ * 不会让整个详情页空白。
+ */
+function AppStoreProfile({
+  trackId,
+  country,
+  introZh,
+  fallbackImages = [],
 }: {
-  app: FreeHistoryApp;
-  watched: boolean;
-  onToggleWatch: () => void;
-  onClose: () => void;
+  trackId: number | null;
+  country?: string;
+  introZh?: string | null;
+  fallbackImages?: string[];
 }) {
-  const swipe = useRankingSwipeBack(onClose);
+  const [lightbox, setLightbox] = useState<number | null>(null);
+  const [showIntro, setShowIntro] = useState(false);
+  const [showOfficial, setShowOfficial] = useState(false);
+  const query = useQuery({
+    queryKey: ["appStoreDetail", trackId, country ?? "us"],
+    queryFn: () => api.appStoreDetail({ trackId: trackId!, country }),
+    enabled: trackId != null,
+    staleTime: 30 * 60_000,
+  });
+  const d: AppStoreDetailData | undefined = query.data;
+  const officialShots = [...(d?.screenshots ?? []), ...(d?.ipadScreenshots ?? [])];
+  const images = officialShots.length ? officialShots : fallbackImages;
+  const shotCount = images.length;
   useEffect(() => {
+    if (lightbox == null) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") setLightbox(null);
+      if (e.key === "ArrowRight") setLightbox((i) => (i == null ? i : (i + 1) % Math.max(1, shotCount)));
+      if (e.key === "ArrowLeft") setLightbox((i) => (i == null ? i : (i - 1 + shotCount) % Math.max(1, shotCount)));
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  const rows: [string, string][] = [
-    ["当前价格", fmtCents(app.currentCents, app.currency)],
-    ["历史最高", fmtCents(app.wasCents, app.currency)],
-    ["限免次数", `${app.freeWindows} 次`],
-    ["限免天数", `${app.freeDays} / ${app.points.length} 个观测日`],
-    ["首次记录", app.firstDate],
-    ["最近记录", app.lastDate],
-    ["价格口径", `美区 App Store · ${app.currency}`],
+  }, [lightbox, shotCount]);
+  if (trackId == null) return null;
+
+  const zh = (introZh ?? "").trim();
+  const official = d?.description?.trim() ?? "";
+  // 有些新收录的条目中文介绍字段里其实是未翻译的英文，和官方原文重复；
+  // 只在确实含中文（或没有原文可读）时才单独展示「应用介绍」。
+  const showZh = zh.length > 0 && (/[\u4e00-\u9fff]/.test(zh) || !official);
+  const big = lightbox != null ? images[lightbox] : null;
+  const allRows: [string, string][] = [
+    ["开发者", d?.sellerName ?? "—"],
+    ["类别", d?.genres?.length ? d.genres.join(" / ") : "—"],
+    ["当前版本", d?.version ?? "—"],
+    ["应用大小", fmtAppBytes(d?.fileSizeBytes ?? null)],
+    ["系统要求", d?.minOsVersion ? `iOS ${d.minOsVersion} 或更高` : "—"],
+    ["支持语言", d?.languages?.length ? `${d.languages.length} 种` : "—"],
+    ["年龄分级", d?.contentRating ?? "—"],
+    ["上架日期", fmtAppDate(d?.releaseDate ?? null)],
+    ["最近更新", fmtAppDate(d?.updatedDate ?? null)],
   ];
-  return createPortal(
-    <div
-      className="v-scroll-only fixed inset-0 z-40"
-      role="dialog"
-      aria-modal="true"
-      aria-label={`历史限免详情：${app.name}`}
-      data-price-detail
-      data-app-detail
-      {...swipe.handlers}
-      style={swipe.style}
-    >
-      <SafeAreaTopScrim backgroundColor="var(--bg)" />
-      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
-        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
-          <button type="button" onClick={onClose} aria-label="返回历史限免" className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]">
-            ← 返回
-          </button>
-          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">APP STORE · PRICE HISTORY</span>
-        </div>
+  const rows = allRows.filter(([, v]) => v !== "—");
+  const rating = d?.rating ?? null;
+  const ratingCount = d?.ratingCount ?? null;
+
+  return (
+    <section className="mt-6" data-app-store-profile>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">App Store 官方资料</h2>
+        <span className="font-mono text-[9px] text-[var(--dim2)]">APP STORE · DETAIL</span>
       </div>
-      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
-        <div className="flex items-center gap-4">
-          {app.iconUrl ? (
-            <img src={app.iconUrl} alt="" className="h-[76px] w-[76px] flex-none rounded-[19px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
-          ) : (
-            <div className="grid h-[76px] w-[76px] flex-none place-items-center rounded-[19px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
-              {(app.name.trim()[0] ?? "A").toUpperCase()}
+
+      {query.isPending ? (
+        <p className="mt-2 py-8 text-center text-sm text-[var(--dim)]">正在读取 App Store 官方资料…</p>
+      ) : null}
+      {query.isError || d?.ok === false ? (
+        <p className="mt-2 font-mono text-[9px] leading-[1.6] text-[var(--warn)]">官方资料接口暂时没响应，截图与介绍改用本站已收录的内容。</p>
+      ) : null}
+
+      {rating != null && rating > 0 ? (
+        <div className="mt-2 flex items-center gap-4 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 shadow-[var(--glass-hi)]">
+          <div className="flex-none text-center">
+            <div className="font-num text-[26px] font-bold leading-none text-[var(--text)]">{rating.toFixed(1)}</div>
+            <div className="mt-1 font-mono text-[9px] text-[var(--dim2)]">满分 5 分</div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-bold text-[var(--accent)]">★ {rating.toFixed(1)}</div>
+            <div className="mt-1 truncate font-mono text-[9px] text-[var(--dim2)]">
+              {ratingCount != null ? `${ratingCount.toLocaleString()} 个评分` : "用户评分"}
+              {d?.contentRating ? ` · ${d.contentRating}` : ""}
+              {d?.genres?.[0] ? ` · ${d.genres[0]}` : ""}
             </div>
-          )}
-          <div className="min-w-0">
-            <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">{app.isFreeNow ? "正在限免" : "限免历史"}</div>
-            <h1 className="mt-1 font-serif text-[21px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
-            <p className="mt-1 font-num text-[18px] font-bold" style={{ color: app.isFreeNow ? "var(--free-ink)" : "var(--text)" }}>
-              {fmtCents(app.currentCents, app.currency)}
-            </p>
           </div>
+          {d?.formattedPrice ? (
+            <div className="flex-none text-right">
+              <div className="text-[13px] font-bold text-[var(--free-ink)]">{d.formattedPrice}</div>
+              <div className="mt-1 font-mono text-[9px] text-[var(--dim2)]">{d.country.toUpperCase()} 区现价</div>
+            </div>
+          ) : null}
         </div>
+      ) : null}
 
-        <div className="mt-6 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
-          <div className="mb-1 flex items-baseline justify-between px-1">
-            <span className="text-[11px] font-bold text-[var(--text)]">历史价格曲线</span>
-            <span className="font-mono text-[9px] text-[var(--dim2)]">STEP · DAILY</span>
+      {images.length ? (
+        <>
+          <div className="mt-4 flex items-baseline justify-between">
+            <h3 className="text-[12px] font-bold text-[var(--text)]">应用截图</h3>
+            <span className="font-mono text-[9px] text-[var(--dim2)]">共 {images.length} 张 · 点开看大图</span>
           </div>
-          <PriceChart app={app} />
-        </div>
+          <div className="mt-2 flex snap-x snap-mandatory gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="group" aria-label="App Store 官方截图">
+            {images.map((u, i) => (
+              <button
+                key={`${u}-${i}`}
+                type="button"
+                data-app-shot
+                onClick={() => setLightbox(i)}
+                aria-label={`查看截图 ${i + 1}`}
+                className="h-[248px] w-[140px] flex-none snap-start overflow-hidden rounded-[12px] border border-[var(--border)] bg-[var(--surface2)]"
+              >
+                <img src={appShotThumb(u)} alt="" loading="lazy" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
 
+      {showZh ? (
+        <div className="mt-4">
+          <h3 className="text-[12px] font-bold text-[var(--text)]">应用介绍</h3>
+          <p className={`mt-2 whitespace-pre-line text-[13px] leading-[1.8] text-[var(--dim)] ${showIntro ? "" : "line-clamp-6"}`}>{zh}</p>
+          {zh.length > 180 ? (
+            <button type="button" onClick={() => setShowIntro((v) => !v)} className="mt-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+              {showIntro ? "收起 ∧" : "展开全文 ∨"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {official ? (
+        <div className="mt-4 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--glass-hi)]">
+          <div className="flex items-baseline justify-between gap-2">
+            <h3 className="text-[12px] font-bold text-[var(--text)]">详细介绍{showZh ? "（App Store 原文）" : ""}</h3>
+            <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">APPLE 官方</span>
+          </div>
+          <p className={`mt-2 whitespace-pre-line text-[12px] leading-[1.75] text-[var(--dim)] ${showOfficial ? "" : "line-clamp-5"}`}>{official}</p>
+          {official.length > 220 ? (
+            <button type="button" onClick={() => setShowOfficial((v) => !v)} className="mt-1.5 font-mono text-[10px] font-bold text-[var(--accent)]">
+              {showOfficial ? "收起 ∧" : "展开全文 ∨"}
+            </button>
+          ) : null}
+          {d?.releaseNotes && showOfficial ? (
+            <p className="mt-3 border-t border-[var(--border)] pt-3 font-mono text-[10px] leading-[1.6] text-[var(--dim2)]">此版本更新：{d.releaseNotes}</p>
+          ) : null}
+        </div>
+      ) : null}
+
+      {rows.length ? (
         <dl className="mt-4 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
           {rows.map(([k, v]) => (
             <div key={k} className="flex justify-between gap-4">
@@ -2810,221 +2887,128 @@ function PriceDetail({
             </div>
           ))}
         </dl>
+      ) : null}
 
-        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
-          曲线每个点都是本站每日调用 Apple 官方 Lookup 记录下的真实价格（美区 USD），0 元即当日限免。观测自 2026/11/08 起逐日累积，早期收录的 App 点数会更多；中途加入观察的应用不会有更早的数据。
-        </p>
+      <p className="mt-2 font-mono text-[9px] leading-[1.7] text-[var(--dim2)]">
+        截图、介绍与规格来自 Apple 官方 App Store{d?.country ? `（${d.country.toUpperCase()} 区）` : ""}，每 30 分钟刷新；实际价格与下载以商店页为准。
+      </p>
 
-        <div className="mt-6 flex gap-2.5">
-          <a href={app.storeUrl ?? "#"} target="_blank" rel="noreferrer" className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80">
-            在 App Store 打开 ↗
-          </a>
-          <button
-            type="button"
-            onClick={onToggleWatch}
-            aria-pressed={watched}
-            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
-            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
-              watched ? "border-transparent bg-grad text-[var(--accent-ink)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
-            }`}
-          >
-            {watched ? "★ 已关注" : "☆ 加关注"}
-          </button>
-        </div>
-        {watched ? <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p> : null}
-      </div>
-    </div>,
-    document.body,
+      {big
+        ? createPortal(
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4" role="dialog" aria-modal="true" aria-label="截图大图" onClick={() => setLightbox(null)}>
+              <img src={big} alt="" onClick={(e) => e.stopPropagation()} className="max-h-[86vh] max-w-full rounded-[12px] object-contain" />
+              {images.length > 1 ? (
+                <>
+                  <button type="button" aria-label="上一张" onClick={(e) => { e.stopPropagation(); setLightbox((i) => (i == null ? i : (i - 1 + images.length) % images.length)); }} className="absolute left-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-2xl leading-none text-white">‹</button>
+                  <button type="button" aria-label="下一张" onClick={(e) => { e.stopPropagation(); setLightbox((i) => (i == null ? i : (i + 1) % images.length)); }} className="absolute right-3 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/15 text-2xl leading-none text-white">›</button>
+                </>
+              ) : null}
+              <button type="button" onClick={() => setLightbox(null)} aria-label="关闭大图" className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/15 text-lg text-white">✕</button>
+              <span className="absolute bottom-6 left-0 right-0 text-center font-mono text-[11px] text-white/70">
+                {(lightbox ?? 0) + 1} / {images.length}
+              </span>
+            </div>,
+            document.body,
+          )
+        : null}
+    </section>
   );
 }
 
-/** 历史限免条目落进本地「我关注的」时补齐 StoreApp 字段。 */
-function freeHistoryToStoreApp(a: FreeHistoryApp): StoreApp {
-  return {
-    trackId: a.trackId,
-    name: a.name,
-    iconUrl: a.iconUrl,
-    storeUrl: a.storeUrl,
-    sellerName: null,
-    genre: null,
-    price: a.currentCents / 100,
-    formattedPrice: fmtCents(a.currentCents, a.currency),
-    currency: a.currency,
-    rating: null,
-    ratingCount: null,
-    collected: false,
-    tag: null,
-    dealId: null,
-  };
-}
-
-function HistoryRow({ app, onOpen }: { app: FreeHistoryApp; onOpen?: (a: FreeHistoryApp) => void }) {
-  const sub = [fmtCents(app.currentCents, app.currency), app.wasCents > app.currentCents ? `原价 ${fmtCents(app.wasCents, app.currency)}` : null, `限免 ${app.freeWindows} 次 · ${app.freeDays} 天`]
-    .filter(Boolean)
-    .join(" · ");
-  const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 text-left shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70";
-  const inner = (
-    <>
-      {app.iconUrl ? (
-        <img src={app.iconUrl} alt="" loading="lazy" className="h-11 w-11 flex-none rounded-[12px] bg-[var(--surface2)] object-cover" />
-      ) : (
-        <div className="h-11 w-11 flex-none rounded-[12px] bg-[var(--surface2)]" />
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[13px] font-bold text-[var(--text)]">{app.name}</div>
-        <div className="mt-0.5 truncate font-mono text-[9.5px] text-[var(--dim)]">{sub}</div>
-      </div>
-      <Sparkline points={app.points} />
-      <span className="flex-none font-mono text-[9px] text-[var(--dim2)]">详情 →</span>
-    </>
-  );
-  if (onOpen) {
-    return (
-      <button type="button" data-history-row onClick={() => onOpen(app)} aria-label={`查看历史限免：${app.name}`} className={cls}>
-        {inner}
-      </button>
-    );
-  }
-  return <div className={cls}>{inner}</div>;
-}
-
-/** 第 4 个板块：全站趋势 + 统计 + App 价格轨迹列表。 */
-function HistoryBoard({ tabs, onOpen }: { tabs?: ReactNode; onOpen?: (a: FreeHistoryApp) => void }) {
-  const [metric, setMetric] = useState<"free" | "flow">("free");
-  const [filter, setFilter] = useState<"free" | "changed" | "all">("free");
-  const [showAll, setShowAll] = useState(false);
+/** 限免 App 详情页里的历史价格曲线：实线是本站每日的 Apple 官方价格快照，
+ *  应用进入观察名单之前的时段，用收录时标注的原价补一个虚线锚点作为降价起点。 */
+function AppPriceHistory({ deal }: { deal: Deal }) {
+  const isIos = deal.appStore === true && /^ios(?:free|iap)-/.test(deal.externalId);
+  const trackId = isIos ? iosDealTrackId(deal) : null;
   const query = useQuery({
     queryKey: ["freeHistory"],
     queryFn: () => api.freeHistory({}),
+    enabled: trackId != null,
     staleTime: 30 * 60_000,
   });
-  const days = query.data?.days ?? [];
-  const apps = query.data?.apps ?? [];
-  const summary = query.data?.summary;
-  const todayFree = days.length ? days[days.length - 1]!.free : 0;
-  const filtered = useMemo(() => {
-    const picked =
-      filter === "free" ? apps.filter((a) => a.isFreeNow)
-      : filter === "changed" ? apps.filter((a) => a.wasCents > a.currentCents)
-      : apps;
-    // Apps with an actual price change make the sparkline meaningful, so put
-    // them first instead of leading with a wall of always-free flat lines.
-    return picked.slice().sort(
-      (a, b) =>
-        Number(b.wasCents > b.currentCents) - Number(a.wasCents > a.currentCents) ||
-        b.freeWindows - a.freeWindows ||
-        b.freeDays - a.freeDays ||
-        a.name.localeCompare(b.name),
-    );
-  }, [apps, filter]);
-  const shown = showAll ? filtered.slice(0, 60) : filtered.slice(0, 12);
-  const cards: [string, string | number][] = [
-    ["今日限免", todayFree],
-    ["曾限免", summary?.everFree ?? "—"],
-    ["价格变动", summary?.changedApps ?? "—"],
-    ["观测天数", summary?.dayCount ?? "—"],
+  if (!isIos || trackId == null) return null;
+
+  const rec = query.data?.apps.find((a) => a.trackId === trackId);
+  const currency = rec?.currency ?? "USD";
+  const baseCents = deal.worthCents ?? 0;
+  const pubDate = (deal.publishedAt ?? "").slice(0, 10);
+  const until = query.data?.until ?? new Date().toISOString().slice(0, 10);
+  const real: PricePoint[] = (rec?.points ?? []).map((p) => ({ date: p.date, cents: p.cents }));
+  const firstReal = real[0];
+  const points: PricePoint[] = [];
+  // 只有首个实测点已是 0 元（或还没有实测点）时才接原价锚点，
+  // 否则会凭空画出一段并不存在的涨价。
+  if (baseCents > 0 && pubDate && (!firstReal || pubDate < firstReal.date) && (!real.length || real[0]!.cents === 0)) {
+    points.push({ date: pubDate, cents: baseCents, inferred: true });
+  }
+  points.push(...real);
+  if (points.length === 0) {
+    points.push({ date: pubDate || query.data?.since || until, cents: baseCents, inferred: true });
+    points.push({ date: until, cents: 0, inferred: true });
+  } else if (points.every((p) => p.inferred)) {
+    points.push({ date: until, cents: 0, inferred: true });
+  }
+
+  const currentCents = rec?.currentCents ?? 0;
+  const wasCents = rec?.wasCents ?? baseCents;
+  const freeDays = rec?.freeDays ?? points.filter((p) => p.cents === 0).length;
+  const freeWindows = rec?.freeWindows ?? (points.some((p) => p.cents === 0) ? 1 : 0);
+  const hasSnapshot = real.length > 0;
+  const hasAnchor = points.some((p) => p.inferred);
+  const isIap = deal.externalId.startsWith("iosiap-");
+  const resumed = hasSnapshot && currentCents > 0 && deal.status === "active";
+  const rows: [string, string][] = [
+    ["最新快照价", fmtCents(currentCents, currency)],
+    ["收录原价", baseCents > 0 ? fmtCents(baseCents, "USD") : "未标注"],
+    ["历史最高", fmtCents(wasCents, currency)],
+    ["限免次数", `${freeWindows} 次`],
+    ["免费天数", `${freeDays} 天`],
+    ["观测区间", hasSnapshot ? `${rec?.firstDate ?? ""} → ${rec?.lastDate ?? ""}` : "尚未开始累积"],
   ];
   return (
-    <div className="mt-5 pb-2" data-board="history">
-      <SectionHead no="01" title="历史限免曲线" en="FREE HISTORY" />
-      {tabs ?? null}
-      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        基于本站每日记录的 App Store 官方价格（美区 USD）· 自 {query.data?.since ?? "2026-11-08"} 起逐日累积 · 点条目看单个 App 的完整曲线
-      </p>
-
-      <div className="mt-3 grid grid-cols-4 gap-2">
-        {cards.map(([label, val]) => (
-          <div key={label} className="rounded-[13px] border border-[var(--border)] bg-[var(--surface)] px-2 py-2.5 text-center shadow-[var(--glass-hi)]">
-            <div className="font-num text-[19px] font-bold leading-none text-[var(--text)]">{val}</div>
-            <div className="mt-1.5 font-mono text-[8.5px] text-[var(--dim2)]">{label}</div>
+    <section className="mt-6" data-app-price-history>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">历史价格曲线</h2>
+        <span className="font-mono text-[9px] text-[var(--dim2)]">APP STORE · PRICE HISTORY</span>
+      </div>
+      <div className="mt-2 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
+        {query.isPending ? (
+          <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取历史价格…</p>
+        ) : query.isError ? (
+          <p className="py-10 text-center text-sm text-[var(--dim)]">历史价格暂时读不到，稍后重试</p>
+        ) : (
+          <>
+            <PriceChart
+              points={points}
+              currency={currency}
+              name={deal.title}
+              xLabels={hasSnapshot ? undefined : { left: "收录时", mid: "原价 → 现价", right: "今日" }}
+            />
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 font-mono text-[9px] text-[var(--dim2)]">
+              {hasSnapshot ? <span><i className="mr-1 inline-block h-[2px] w-3 align-middle" style={{ background: "var(--text)" }} />每日实测</span> : null}
+              {hasAnchor ? <span><i className="mr-1 inline-block h-[2px] w-3 align-middle" style={{ background: "var(--dim2)" }} />收录原价（虚线）</span> : null}
+              <span><i className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--free-ink)" }} />底部绿带 = 0 元免费线</span>
+            </div>
+          </>
+        )}
+      </div>
+      <dl className="mt-3 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex justify-between gap-4">
+            <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+            <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
           </div>
         ))}
-      </div>
-
-      {query.isPending ? (
-        <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取历史快照…</p>
-      ) : query.isError ? (
-        <EmptyNote title="历史曲线暂时读不到" sub="快照接口没响应或网络超时，稍后重试。" />
-      ) : days.length === 0 ? (
-        <EmptyNote title="还没有历史数据" sub="每日价格快照会从今天开始逐日累积，过几天再来看曲线。" />
-      ) : (
-        <>
-          <div className="mt-3 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <div className="text-[12px] font-bold text-[var(--text)]">每日限免 App 数</div>
-                <div className="mt-0.5 font-mono text-[9px] text-[var(--dim2)]">{query.data?.since} → {query.data?.until}</div>
-              </div>
-              <div className="text-right">
-                <div className="font-num text-[22px] font-bold leading-none" style={{ color: "var(--free-ink)" }}>{todayFree}</div>
-                <div className="mt-1 font-mono text-[8.5px] text-[var(--dim2)]">今日 / {days[days.length - 1]!.tracked} 款在观察</div>
-              </div>
-            </div>
-            <div className="mt-2 flex gap-1.5">
-              {(["free", "flow"] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMetric(m)}
-                  aria-pressed={metric === m}
-                  className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${metric === m ? "bg-grad text-[var(--accent-ink)]" : "border border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"}`}
-                >
-                  {m === "free" ? "限免数" : "新增 / 结束"}
-                </button>
-              ))}
-            </div>
-            <div className="mt-1">
-              <TrendChart days={days} metric={metric} />
-            </div>
-            <div className="flex items-center gap-3 px-1 font-mono text-[9px] text-[var(--dim2)]">
-              {metric === "free" ? (
-                <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--free-ink)" }} />当日处于限免</span>
-              ) : (
-                <>
-                  <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--free-ink)" }} />新开始限免</span>
-                  <span><span className="mr-1 inline-block h-1.5 w-1.5 rounded-full align-middle" style={{ background: "var(--dim2)" }} />限免结束</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 flex items-baseline justify-between">
-            <h2 className="text-[13px] font-bold text-[var(--text)]">App 价格轨迹</h2>
-            <span className="font-mono text-[9px] text-[var(--dim2)]">{filtered.length} 款</span>
-          </div>
-          <div className="mt-2 flex gap-1.5">
-            {([["free", "限免中"], ["changed", "有变动"], ["all", "全部"]] as const).map(([k, label]) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => { setFilter(k); setShowAll(false); }}
-                aria-pressed={filter === k}
-                className={`rounded-full px-3 py-1.5 text-[10.5px] font-bold ${filter === k ? "bg-grad text-[var(--accent-ink)]" : "border border-[var(--border)] bg-[var(--surface)] text-[var(--dim)]"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {shown.length === 0 ? (
-            <EmptyNote title="没有匹配的应用" sub="切换上方筛选，或过几天等快照累积更多。" />
-          ) : (
-            <>
-              <div className="mt-3 flex flex-col gap-[9px]">
-                {shown.map((a) => <HistoryRow key={a.trackId} app={a} onOpen={onOpen} />)}
-              </div>
-              {!showAll && filtered.length > shown.length ? (
-                <button type="button" onClick={() => setShowAll(true)} className="mt-3 w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface)] py-2.5 text-[11px] font-bold text-[var(--text)]">
-                  显示更多（还有 {filtered.length - shown.length} 款）
-                </button>
-              ) : null}
-            </>
-          )}
-          <p className="mt-3 font-mono text-[9px] leading-[1.6] text-[var(--dim2)]">
-            曲线为每日一次的真实价格快照，不是连续监控；应用首次进入观察名单之前的时段没有数据，请勿据此判断 Apple 未显示的历史价格。
-          </p>
-        </>
-      )}
-    </div>
+      </dl>
+      <p className="mt-2 font-mono text-[9px] leading-[1.7] text-[var(--dim2)]">
+        {hasSnapshot
+          ? "实线为本站每日调用 Apple 官方 Lookup 记录的美区价格（0 元即当日限免），不是连续监控；应用首次进入观察名单之前没有实测数据。"
+          : "该应用尚未进入每日价格观察名单，曲线暂以本站收录时标注的原价与当前核验价绘制；进入名单后会逐日累积实测快照。"}
+        {hasAnchor ? " 虚线段为收录时标注的原价，用于标出降价起点。" : ""}
+        {isIap ? " 本条为内购限免，曲线记录的是 App 本体价格，内购项价格不在其中。" : ""}
+        {resumed ? " 注意：最近一次快照已恢复原价，领取前请在 App Store 确认当前价格。" : ""}
+      </p>
+    </section>
   );
 }
 
@@ -3049,8 +3033,6 @@ function AppsPage({
   const [detailRank, setDetailRank] = useState<{ app: RankingApp; meta: RankingMeta } | null>(null);
   // Arcade 条目同样先落在应用内详情页。
   const [detailArcade, setDetailArcade] = useState<ArcadeGame | null>(null);
-  // 历史限免条目点进价格曲线详情页。
-  const [detailPrice, setDetailPrice] = useState<FreeHistoryApp | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -3292,14 +3274,6 @@ function AppsPage({
           onClose={() => setDetailArcade(null)}
         />
       ) : null}
-      {detailPrice ? (
-        <PriceDetail
-          app={detailPrice}
-          watched={storeWatchIds.has(detailPrice.trackId)}
-          onToggleWatch={() => toggleStoreWatch(freeHistoryToStoreApp(detailPrice))}
-          onClose={() => setDetailPrice(null)}
-        />
-      ) : null}
       <div className="flex items-baseline gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
@@ -3308,8 +3282,6 @@ function AppsPage({
         <RankingBoard initialRegion={region} tabs={subTabsRow} onOpen={(app, meta) => setDetailRank({ app, meta })} />
       ) : subTab === "arcade" ? (
         <ArcadeBoard tabs={subTabsRow} onOpen={(g) => setDetailArcade(g)} />
-      ) : subTab === "history" ? (
-        <HistoryBoard tabs={subTabsRow} onOpen={(a) => setDetailPrice(a)} />
       ) : (
         <div className="mt-5">
       <SectionHead no="01" title="限免情报" en="IOS APP FREEBIES" />

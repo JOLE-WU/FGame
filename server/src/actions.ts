@@ -4718,6 +4718,10 @@ const batchVerifyResponse = z.object({
 const APP_SEARCH_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", "kr", "sg", "au"]);
 const APP_SEARCH_TTL_MS = 5 * 60_000;
 const appSearchCache = new Map<string, { at: number; rows: Record<string, unknown>[] }>();
+// Single-app App Store product-page lookup for the detail sheets. Cached for
+// 30 min so opening a detail page repeatedly does not hammer Apple.
+const APP_DETAIL_TTL_MS = 30 * 60_000;
+const appDetailCache = new Map<string, { at: number; row: Record<string, unknown> }>();
 
 /* ------------------------------------------------------------------ */
 /* App Store 排行榜 / Apple Arcade                                     */
@@ -7882,6 +7886,108 @@ export const Actions = {
           longestFreeDays: longest,
           dayCount: allDates.length,
         },
+      };
+    },
+  }),
+
+  /** Full App Store product page for one app: official screenshots, the full
+   *  store description, ratings and the spec sheet shown in detail sheets. */
+  appStoreDetail: defineAction({
+    description: "Full App Store product-page metadata for one app by trackId: official screenshots, complete store description, ratings, developer, version, size, minimum OS, languages and age rating. Results are cached 30 minutes.",
+    request: z.object({
+      trackId: z.number().int().positive(),
+      country: z.string().trim().min(2).max(5).optional(),
+    }),
+    response: z.object({
+      ok: z.boolean(),
+      trackId: z.number(),
+      country: z.string(),
+      name: z.string(),
+      iconUrl: z.string().nullable(),
+      storeUrl: z.string().nullable(),
+      formattedPrice: z.string().nullable(),
+      currency: z.string(),
+      screenshots: z.array(z.string()),
+      ipadScreenshots: z.array(z.string()),
+      description: z.string().nullable(),
+      releaseNotes: z.string().nullable(),
+      rating: z.number().nullable(),
+      ratingCount: z.number().nullable(),
+      sellerName: z.string().nullable(),
+      genres: z.array(z.string()),
+      version: z.string().nullable(),
+      minOsVersion: z.string().nullable(),
+      fileSizeBytes: z.number().nullable(),
+      contentRating: z.string().nullable(),
+      languages: z.array(z.string()),
+      releaseDate: z.string().nullable(),
+      updatedDate: z.string().nullable(),
+    }),
+    async handler(_ctx, args) {
+      const country = APP_SEARCH_COUNTRIES.has(args.country ?? "us") ? (args.country ?? "us") : "us";
+      const key = `${country}:${args.trackId}`;
+      const hit = appDetailCache.get(key);
+      let row: Record<string, unknown> | null =
+        hit && Date.now() - hit.at < APP_DETAIL_TTL_MS ? hit.row : null;
+      if (!row) {
+        try {
+          const res = await fetch(
+            `https://itunes.apple.com/lookup?id=${args.trackId}&country=${country}&entity=software`,
+            { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12_000) },
+          );
+          if (res.ok) {
+            const data = (await res.json()) as Record<string, unknown>;
+            const results = Array.isArray(data.results) ? data.results : [];
+            const found = results.find(
+              (r) => typeof r === "object" && r !== null && Number((r as Record<string, unknown>).trackId) === args.trackId,
+            );
+            row = (found as Record<string, unknown> | undefined) ?? null;
+          }
+        } catch {
+          row = null;
+        }
+        if (row) {
+          appDetailCache.set(key, { at: Date.now(), row });
+          if (appDetailCache.size > 160) {
+            for (const k of [...appDetailCache.keys()].slice(0, 40)) appDetailCache.delete(k);
+          }
+        }
+      }
+      const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+      // Apple sends fileSizeBytes as a string, ratings as numbers — accept both.
+      const num = (v: unknown) => {
+        if (typeof v === "number" && Number.isFinite(v)) return v;
+        if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
+        return null;
+      };
+      const arr = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+      // Apple returns resized 392x696 thumbnails; the /0x0ss.jpg path is the
+      // full-resolution variant already used by the gallery enrichment.
+      const upgrade = (u: string) => u.replace(/\/\d+x\d+bb\.(jpg|png)$/i, "/0x0ss.jpg");
+      return {
+        ok: row != null,
+        trackId: args.trackId,
+        country,
+        name: str(row?.trackName) ?? "",
+        iconUrl: str(row?.artworkUrl512),
+        storeUrl: str(row?.trackViewUrl),
+        formattedPrice: str(row?.formattedPrice),
+        currency: str(row?.currency) ?? "USD",
+        screenshots: arr(row?.screenshotUrls).map(upgrade),
+        ipadScreenshots: arr(row?.ipadScreenshotUrls).map(upgrade),
+        description: str(row?.description),
+        releaseNotes: str(row?.releaseNotes),
+        rating: num(row?.averageUserRating),
+        ratingCount: num(row?.userRatingCount),
+        sellerName: str(row?.sellerName) ?? str(row?.artistName),
+        genres: arr(row?.genres),
+        version: str(row?.version),
+        minOsVersion: str(row?.minimumOsVersion),
+        fileSizeBytes: num(row?.fileSizeBytes),
+        contentRating: str(row?.contentAdvisoryRating) ?? str(row?.trackContentRating),
+        languages: arr(row?.languageCodesISO2A),
+        releaseDate: str(row?.releaseDate),
+        updatedDate: str(row?.currentVersionReleaseDate),
       };
     },
   }),
