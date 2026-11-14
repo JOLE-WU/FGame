@@ -1,6 +1,16 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Outfit:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Baloo+2:wght@600;700;800&family=Nunito:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap');
 @import "tailwindcss";
 @import "tailwindcss-safe-area";
+
+/* ============================================================
+   FGame · 极简双主题（MONO / MONO DARK）
+   ------------------------------------------------------------
+   Visual direction 03: pure flat colour, single neutral accent,
+   hairline edges, no gradients / no glass blur / no glow.
+   Layout, spacing, type sizes and all JSX are UNCHANGED — this file
+   only swaps the token layer and overrides the few component classes
+   that used to paint gradients, blurs and aurora glows.
+   ============================================================ */
 
 @theme {
   --text-xs: 12px;
@@ -17,67 +27,61 @@
   --text-2xl--line-height: 32px;
   --text-3xl: 30px;
   --text-3xl--line-height: 36px;
-  /* AURORA GLASS: the reference's serif slots become Outfit 600 */
-  --font-serif: "Outfit", "Noto Sans SC", "PingFang SC", sans-serif;
+  /* Only the display / numeric slots get the editorial serif.
+     Body copy keeps the original Outfit (dark) and Nunito (light). */
+  --font-serif: "Instrument Serif", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
+  --font-num: "Instrument Serif", "Noto Serif CJK SC", "Songti SC", Georgia, serif;
   --font-mono: "IBM Plex Mono", "Noto Sans SC", monospace;
-  --font-num: "Outfit", "Noto Sans SC", sans-serif;
-  /* the one accent: cyan → violet gradient (bg-grad) */
-  --background-image-grad: linear-gradient(100deg, #6ee7f9, #b794f6);
+  /* bg-grad used to be a cyan→violet gradient. It is now a FLAT fill;
+     each theme overrides it below with its own solid accent. */
+  --background-image-grad: linear-gradient(180deg, #ffffff, #ffffff);
 }
 
+/* ------------------------------------------------------------
+   DARK · 极简墨黑 (default, no data-theme or data-theme="dark")
+   ------------------------------------------------------------ */
 :root {
-  /* AURORA GLASS dark is the default theme (no data-theme attribute, or
-     data-theme="dark"). The light theme below overrides ONLY the tokens
-     and aurora stacks; the cyan→violet gradient (--background-image-grad)
-     and the mint free/claimed hue family are shared by both themes. */
   color-scheme: dark;
-  --bg: #070a18;
-  --paper: #0b1026;
-  --surface: rgba(255, 255, 255, 0.095);
-  --surface2: rgba(255, 255, 255, 0.06);
-  --surface3: #0b1026;
-  --text: #f2f5ff;
-  --dim: #c6d0ee;
-  --dim2: #8a96bf;
-  --border: rgba(255, 255, 255, 0.14);
-  --glass-edge: rgba(255, 255, 255, 0.16);
-  --glass-edge-strong: rgba(255, 255, 255, 0.28);
-  --chrome-bg: rgba(12, 17, 40, 0.86);
-  --chrome-bg-strong: rgba(12, 17, 40, 0.92);
-  --sticky-bg: rgba(11, 16, 38, 0.82);
-  --accent: #6ee7f9;
-  --accent-strong: #b794f6;
-  --accent-soft: rgba(125, 216, 247, 0.14);
-  --accent-ink: #08101f;
-  /* glow tint for accent shadows + translucent accent border colour;
-     the cream theme swaps both to the coral family */
-  --accent-glow: rgba(110, 231, 249, 0.45);
-  --accent-border: rgba(125, 216, 247, 0.5);
+  --bg: #0b0b0c;
+  --paper: #0b0b0c;
+  --surface: #141416;
+  --surface2: #19191c;
+  --surface3: #141416;
+  --text: #f6f6f7;
+  --dim: #a0a0a8;
+  --dim2: #65656e;
+  --border: rgba(255, 255, 255, 0.085);
+  --glass-edge: rgba(255, 255, 255, 0.085);
+  --glass-edge-strong: rgba(255, 255, 255, 0.2);
+  /* opaque: WKWebView must never show content through the bottom bar */
+  --chrome-bg: #0b0b0c;
+  --chrome-bg-strong: #0b0b0c;
+  --sticky-bg: #0b0b0c;
+  --accent: #ffffff;
+  --accent-strong: #ffffff;
+  --accent-soft: rgba(255, 255, 255, 0.1);
+  --accent-ink: #0b0b0c;
+  --accent-glow: transparent;
+  --accent-border: rgba(255, 255, 255, 0.45);
+  --background-image-grad: linear-gradient(180deg, #ffffff, #ffffff);
   --warn: #ff9d8a;
-  --warn-bg: rgba(255, 120, 100, 0.14);
-  --free-bg: rgba(143, 233, 196, 0.14);
-  --free-ink: #8fe9c4;
-  /* iOS 内购限免：和本体限免的薄荷绿区分开，用紫罗兰 */
-  --iap-bg: rgba(186, 158, 255, 0.16);
-  --iap-ink: #c3a8ff;
-  /* brand-logo plate (cloud/AI covers): deep navy glass in the dark
-     theme so colourful marks read; cream theme overrides below */
-  --logo-plate: #141b3d;
-  --seg-track: rgba(255, 255, 255, 0.08);
-  --seg-active: rgba(255, 255, 255, 0.16);
-  --glass-hi: inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  --shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.14);
-  --shadow-sm: 0 3px 10px -4px rgba(0, 0, 0, 0.4);
-  --aurora-bg:
-    radial-gradient(circle at 18% 12%, rgba(110, 231, 249, 0.2), transparent 45%),
-    radial-gradient(circle at 82% 22%, rgba(183, 148, 246, 0.24), transparent 48%),
-    radial-gradient(circle at 55% 95%, rgba(80, 120, 255, 0.2), transparent 55%),
-    #070a18;
-  --aurora-bg-soft:
-    radial-gradient(circle at 85% 8%, rgba(183, 148, 246, 0.22), transparent 46%),
-    radial-gradient(circle at 12% 88%, rgba(110, 231, 249, 0.16), transparent 48%),
-    #0b1026;
-  --radius: 20px;
+  --warn-bg: rgba(255, 157, 138, 0.12);
+  /* 已领取 / 本体限免 */
+  --free-bg: rgba(87, 217, 155, 0.13);
+  --free-ink: #57d99b;
+  /* iOS 内购限免 — 与本体限免区分 */
+  --iap-bg: rgba(179, 154, 255, 0.13);
+  --iap-ink: #b39aff;
+  --logo-plate: #19191c;
+  --seg-track: rgba(255, 255, 255, 0.055);
+  --seg-active: rgba(255, 255, 255, 0.12);
+  --glass-hi: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5), 0 14px 30px -28px rgba(0, 0, 0, 0.9);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  /* flat field — no aurora glows */
+  --aurora-bg: #0b0b0c;
+  --aurora-bg-soft: #0b0b0c;
+  --radius: 22px;
   --space-surface: var(--surface);
   --space-surface-alt: var(--surface2);
   --space-muted: var(--dim);
@@ -85,80 +89,60 @@
   --space-accent: var(--accent);
 }
 
-/* ---------- SOFT CREAM · light ----------
-   The light theme is the SOFT CREAM skin (Direction C): warm cream base,
-   solid milk-white cards with NO glass blur — depth comes from soft warm
-   shadows and 1px warm edges. Coral (#F08A6B→#F4A98D gradient fills) is
-   the only emphasis colour; mist green #7FA87C family means free/claimed.
-   Text-facing accent stops deepen slightly (same move the old aurora
-   light theme made) so small coral/green text stays readable on cream;
-   gradient FILLS keep the exact reference gradient. Dark theme above is
-   untouched AURORA GLASS. */
+/* ------------------------------------------------------------
+   LIGHT · 极简墨白
+   ------------------------------------------------------------ */
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #fbf4e9;
-  --paper: #fbf4e9;
-  --surface: #fffdf8;
-  --surface2: #f7ede1;
-  --surface3: #fffdf8;
-  --text: #4a3b33;
-  --dim: #7a655a;
-  --dim2: #a08a76;
-  --border: #efdfce;
-  --glass-edge: #efdfce;
-  --glass-edge-strong: #e3d1bc;
-  --chrome-bg: rgba(255, 253, 248, 0.97);
-  --chrome-bg-strong: #fffdf8;
-  --sticky-bg: rgba(251, 244, 233, 0.97);
-  --background-image-grad: linear-gradient(100deg, #f08a6b, #f4a98d);
-  --accent: #cf6238;
-  --accent-strong: #f4a98d;
-  --accent-soft: rgba(240, 138, 107, 0.12);
+  --bg: #ffffff;
+  --paper: #ffffff;
+  --surface: #ffffff;
+  --surface2: #f7f7f8;
+  --surface3: #ffffff;
+  --text: #0b0b0c;
+  --dim: #57575e;
+  --dim2: #9a9aa3;
+  --border: rgba(11, 11, 12, 0.09);
+  --glass-edge: rgba(11, 11, 12, 0.09);
+  --glass-edge-strong: rgba(11, 11, 12, 0.18);
+  --chrome-bg: #ffffff;
+  --chrome-bg-strong: #ffffff;
+  --sticky-bg: #ffffff;
+  --accent: #0b0b0c;
+  --accent-strong: #0b0b0c;
+  --accent-soft: rgba(11, 11, 12, 0.06);
   --accent-ink: #ffffff;
-  --accent-glow: rgba(240, 138, 107, 0.55);
-  --accent-border: rgba(240, 138, 107, 0.55);
+  --accent-glow: transparent;
+  --accent-border: rgba(11, 11, 12, 0.5);
+  --background-image-grad: linear-gradient(180deg, #0b0b0c, #0b0b0c);
   --warn: #bf452c;
-  --warn-bg: rgba(191, 69, 44, 0.1);
-  --free-bg: rgba(127, 168, 124, 0.16);
-  --free-ink: #527a4e;
-  --iap-bg: rgba(124, 92, 196, 0.14);
-  --iap-ink: #6b4fa8;
-  /* brand-logo plate in the cream theme: solid milk white */
-  --logo-plate: #fffdf8;
-  --seg-track: #e9dcc9;
-  --seg-active: #fffdf8;
-  --glass-hi: 0 8px 20px -12px rgba(150, 110, 80, 0.32);
-  --shadow: 0 12px 30px -14px rgba(150, 110, 80, 0.3);
-  --shadow-sm: 0 4px 12px -6px rgba(150, 110, 80, 0.32);
-  --aurora-bg:
-    radial-gradient(circle at 20% 10%, rgba(255, 248, 236, 0.9), transparent 60%),
-    radial-gradient(circle at 85% 90%, rgba(246, 220, 203, 0.55), transparent 55%),
-    #fbf4e9;
-  --aurora-bg-soft:
-    radial-gradient(circle at 85% 8%, rgba(246, 220, 203, 0.5), transparent 50%),
-    radial-gradient(circle at 12% 88%, rgba(255, 248, 236, 0.8), transparent 50%),
-    #fdf8ef;
-  /* rounded type: Baloo 2 for display/numbers, Nunito for body AND for
-     the mono-label slots (the cream reference retires the mono look) */
-  --font-serif: "Baloo 2", "Nunito", "Noto Sans SC", "PingFang SC", sans-serif;
-  --font-mono: "Nunito", "Noto Sans SC", "PingFang SC", sans-serif;
-  --font-num: "Baloo 2", "Nunito", "Noto Sans SC", sans-serif;
+  --warn-bg: rgba(191, 69, 44, 0.08);
+  --free-bg: #eef6f1;
+  --free-ink: #1d7a4c;
+  --iap-bg: #f0f0f7;
+  --iap-ink: #4c4c86;
+  --logo-plate: #f7f7f8;
+  --seg-track: #f3f3f5;
+  --seg-active: #e9e9ec;
+  --glass-hi: 0 1px 0 rgba(255, 255, 255, 0.9);
+  --shadow: 0 1px 2px rgba(11, 11, 12, 0.045), 0 12px 28px -26px rgba(11, 11, 12, 0.35);
+  --shadow-sm: 0 1px 2px rgba(11, 11, 12, 0.05);
+  --aurora-bg: linear-gradient(180deg, #ffffff 0%, #fbfbfc 100%);
+  --aurora-bg-soft: linear-gradient(180deg, #ffffff 0%, #fbfbfc 100%);
   --radius: 22px;
 }
 
+/* ------------------------------------------------------------
+   Structural rules — kept verbatim from the previous theme
+   ------------------------------------------------------------ */
 html,
 body {
-  /* themed base everywhere — incl. overscroll / home-indicator zones */
   background: var(--bg);
-  /* the page itself must never scroll or pan sideways: `clip` (unlike
-     `hidden`) creates no scroll container, so sticky headers and inner
-     horizontal scrollers keep working */
   overflow-x: clip;
-  /* no elastic chaining to the host shell in any direction */
   overscroll-behavior: none;
 }
 
-/* aurora glow field behind everything (three glows per the reference) */
+/* flat background field (was the three-spot aurora glow) */
 body::before {
   content: "";
   position: fixed;
@@ -168,23 +152,18 @@ body::before {
   background: var(--aurora-bg);
 }
 
-/* fine grain over the glow field */
+/* very fine grain — nearly invisible, just takes the digital edge off */
 body::after {
   content: "";
   position: fixed;
   inset: 0;
   z-index: 60;
   pointer-events: none;
-  opacity: 0.045;
+  opacity: 0.025;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-/* The actual scroll container of a space is NOT body — it is the SDK's
-   fixed `[data-generated-space-root]` layer (position:fixed; overflow:auto),
-   and `.hatch-space-root` inside it. Lock the real containers: vertical
-   scrolling only, no horizontal pan, no bounce. The aurora background is
-   painted on this layer too, since it covers the viewport. */
 [data-generated-space-root] {
   overflow-x: hidden !important;
   overscroll-behavior: none;
@@ -204,17 +183,14 @@ body {
   font-family: "Outfit", -apple-system, "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* vertical panning only — a horizontal drag on page content does nothing;
-     gestures that start inside an inner horizontal scroller (screenshot
-     strips, chip rows) still scroll that scroller, because touch-action is
-     resolved up to the nearest scrolling ancestor */
   touch-action: pan-y pinch-zoom;
   overscroll-behavior: none;
 }
 
-/* Full-screen overlays (deal detail, Prime claim flow, library game detail)
-   are their own scroll containers — same rule: vertical only, no horizontal
-   pan, no bounce. Their background repaints the aurora field. */
+:root[data-theme="light"] body {
+  font-family: "Nunito", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+}
+
 .v-scroll-only {
   overflow-x: hidden;
   overflow-y: auto;
@@ -224,26 +200,53 @@ body {
   background: var(--aurora-bg-soft);
 }
 
-/* gradient hairline under the masthead (was the broadsheet double rule) */
+/* ------------------------------------------------------------
+   MONO component overrides
+   Kill every glass blur, gradient and glow in one place. The 80+
+   `backdrop-blur-*` utilities in App.tsx stay untouched — they simply
+   stop painting.
+   ------------------------------------------------------------ */
+*,
+*::before,
+*::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* segmented/pills/chips that used the translucent glass helper */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--glass-edge);
+  box-shadow: var(--glass-hi);
+}
+
+/* the masthead rule: one hairline instead of a gradient sweep */
 .double-rule {
   height: 1px;
   border: 0;
-  background: linear-gradient(90deg, var(--accent), rgba(255, 255, 255, 0.14) 42%, transparent);
+  background: var(--border);
 }
 
-/* primary CTA: gradient glow instead of the old hard offset shadow */
+/* gradient-clipped headlines → solid text colour */
+.grad-text,
+.grad-text-mint {
+  background: none !important;
+  -webkit-background-clip: border-box !important;
+  background-clip: border-box !important;
+  color: var(--text) !important;
+}
+
+/* primary CTA: no neon halo, just a restrained press */
 .cta-hard {
-  box-shadow: 0 10px 28px -10px rgba(125, 216, 247, 0.7);
+  box-shadow: var(--shadow-sm);
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 .cta-hard:active {
   transform: translateY(1px);
-  box-shadow: 0 6px 16px -8px rgba(125, 216, 247, 0.7);
+  box-shadow: none;
 }
 
-/* Primary CTA variant for a game already sitting in the library: mint fill
-   instead of the coral gradient, so 「已在库中」 reads as a state, not as
-   another claim to perform. */
+/* state CTA for a game already in the library */
 .cta-inlib {
   border-radius: 14px;
   background: var(--free-bg);
@@ -255,167 +258,45 @@ body {
   transform: translateY(1px);
 }
 
-/* gradient-clipped text for the masthead brand and the brief's big numbers */
-.grad-text {
-  background: linear-gradient(100deg, #6ee7f9, #b794f6);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-.grad-text-mint {
-  background: linear-gradient(120deg, #8fe9c4, #7dd8f7 55%, #c3a5fa);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* glass surface helper: translucent face + bright edge + inner highlight */
-.glass {
-  background: var(--surface);
-  border: 1px solid var(--glass-edge);
-  box-shadow: var(--glass-hi);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-}
-
-/* ---------- SOFT CREAM component treatments (light only) ---------- */
-
-/* body copy switches to the rounded Nunito stack */
-:root[data-theme="light"] body {
-  font-family: "Nunito", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-}
-
-/* no glass in the cream world: every backdrop blur is switched off so
-   cards/chips/bars read as solid milk-white surfaces (the light tokens
-   already make those surfaces opaque) */
-:root[data-theme="light"] * {
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-:root[data-theme="light"] .glass {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-}
-
-/* masthead brand is solid cocoa in cream (the reference drops the
-   gradient headline); the brief's first big number keeps a coral
-   gradient, the second is solid cocoa like the reference's 119 */
-:root[data-theme="light"] h1.grad-text {
-  background: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  color: var(--text);
-}
-:root[data-theme="light"] .grad-text {
-  background: linear-gradient(100deg, #f08a6b, #f4a98d);
-  -webkit-background-clip: text;
-  background-clip: text;
-}
-:root[data-theme="light"] .grad-text-mint {
-  background: none;
-  -webkit-background-clip: border-box;
-  background-clip: border-box;
-  color: var(--text);
-}
-/* Baloo 2 has no light cut — big numbers render in its bold face */
-:root[data-theme="light"] .font-num {
-  font-weight: 700;
-}
-/* Baloo 2 figures run wider than Outfit's: shrink the brief's big
-   numbers a touch so the 全部羊毛 label keeps one line beside them */
-:root[data-theme="light"] section[aria-label="今日战报"] .font-num {
-  font-size: 50px;
-}
-
-/* primary CTA glow turns coral */
-:root[data-theme="light"] .cta-hard {
-  box-shadow: 0 10px 28px -10px rgba(240, 138, 107, 0.65);
-}
-:root[data-theme="light"] .cta-hard:active {
-  box-shadow: 0 6px 16px -8px rgba(240, 138, 107, 0.65);
-}
-
-/* chips on cover imagery (price tag, countdown) become the reference's
-   cocoa pill with cream text; the countdown's number uses the pale
-   coral stop so it stays readable on cocoa */
-:root[data-theme="light"] .img-chip {
-  background: rgba(74, 59, 51, 0.88);
-  color: #fffdf8;
-  border-color: transparent;
-}
-:root[data-theme="light"] .img-chip b {
-  color: #f4a98d;
-}
-
-/* bottom tab bar floats as a cream pill: 10px in from the sides and
-   bottom, 22px radius, warm drop shadow; the active tab's indicator
-   bar keeps the coral gradient (bg-grad token).
-
-   Two iOS-specific fixes (verified with a simulated 34px home-indicator
-   inset):
-   - The base bar uses a 97%-opaque token + backdrop blur. In WKWebView the
-     blur is unreliable and the list underneath shows THROUGH the pill, so
-     the cream bar gets a fully opaque face and no blur.
-   - The bar used to absorb the safe-area inset as bottom padding (34px vs
-     8px on top), pushing the icons 14px above the pill's centre. The inset
-     now lifts the whole pill instead, and the inner row centres its content
-     in a fixed 56px band. */
-:root[data-theme="light"] .tabbar {
-  left: 10px;
-  right: 10px;
-  /* 6px float gap instead of 10: the bar used to read ~14px taller than the
-     system tab bars (WeChat sits 49pt above the home indicator, ours was
-     ~68pt), which is what made it feel oversized on device. */
-  bottom: calc(6px + env(safe-area-inset-bottom, 0px));
-  border: 1px solid var(--border);
-  border-radius: 20px;
-  background: var(--chrome-bg-strong);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  box-shadow: 0 12px 28px -14px rgba(150, 110, 80, 0.5);
-  /* The pill floats in from each side, so the page used to show through
-     those two gutters and the strip beneath it — list artwork scrolled
-     visibly behind the bar. `::before` below paints a full-width pad in the
-     page colour to seal them; keeping overflow visible lets that pad escape
-     the pill's rounded box. */
+/* bottom bar: full width, flat, one hairline on top — no floating pill */
+.tabbar {
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  border-radius: 0 !important;
+  border-top: 1px solid var(--border) !important;
+  background: var(--chrome-bg-strong) !important;
+  box-shadow: none !important;
   overflow: visible;
 }
-
-/* Full-width opaque pad behind the floating pill. It reaches exactly to the
-   screen edges (undoing the pill's insets and its bottom offset, safe-area
-   included) and stops level with the pill's top edge, so content disappears
-   at the bar instead of running through the gaps. */
-:root[data-theme="light"] .tabbar::before {
-  content: "";
-  position: absolute;
-  left: -10px;
-  right: -10px;
-  bottom: calc(-6px - env(safe-area-inset-bottom, 0px));
-  height: calc(100% + 6px + env(safe-area-inset-bottom, 0px));
-  background: var(--bg);
-  z-index: -1;
-  pointer-events: none;
-}
-:root[data-theme="light"] .tabbar > div {
-  height: 46px;
-  padding-top: 0;
-  padding-bottom: 0;
-  align-items: center;
-}
-:root[data-theme="light"] .tabbar > div > button {
-  justify-content: center;
+.tabbar::before {
+  content: none !important;
 }
 
-/* chips that sit ON cover imagery keep their dark scrim + light text in
-   both themes (they are read against the photo, not the page base) */
+/* chips sitting ON cover imagery keep a dark scrim + light text in BOTH
+   themes — they are read against the photo, not against the page base */
 .img-chip {
-  background: rgba(8, 14, 34, 0.82);
-  color: #f2f5ff;
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  background: rgba(10, 10, 12, 0.82);
+  color: #f6f6f7;
+  border-color: transparent;
+}
+.img-chip b {
+  color: #f6f6f7;
 }
 
-/* Platform-account binding: keep the buttons, drop every guidance / sync /
-   diagnostic paragraph (Epic, GOG and Steam alike). */
+/* neutralise the few hardcoded deep-navy glass fills in App.tsx so no
+   blue tint leaks into the mono world */
+[class*="bg-[rgba(8,14,34"] {
+  background-color: var(--surface2) !important;
+}
+[class*="bg-[rgba(11,16,38"] {
+  background-color: var(--surface2) !important;
+}
+/* cover scrim under caption text: neutral black, not the old navy */
+[class*="from-[rgba(5,8,20"] {
+  background-image: linear-gradient(to top, rgba(10, 10, 12, 0.82), rgba(10, 10, 12, 0.38) 45%, transparent) !important;
+}
+
+/* Platform-account binding: keep the buttons, drop guidance paragraphs */
 .bind-clean p { display: none; }
 .bind-clean p.bind-status { display: block; }
