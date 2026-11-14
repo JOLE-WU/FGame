@@ -213,6 +213,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
     private var themeHandler: FGameThemeHandler?
     private var themePoll: Timer?
+    /// 贴在 WebView 后面的一块底色，盖住底部安全区。iOS 用 safe area 给
+    /// WebView 做 contentInset，最底部那一条属于原生窗口：页面滚到底再
+    /// 回弹时会把这条黑边拉出来（窗口默认色是黑）。这块 view 用页面底色
+    /// 画在最底层，回弹时露出来的就是页面底色而不是黑边。
+    private var bottomScrim: UIView?
 
     func application(
         _ application: UIApplication,
@@ -260,6 +265,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             web.isOpaque = false
             web.backgroundColor = .clear
             web.scrollView.backgroundColor = .clear
+            // 关掉橡皮筋回弹：滚到列表尽头再上拉会把整页顶起来，露出
+            // WebView 之外的窗口底色（黑边）。下拉刷新是自己用 touch
+            // 事件实现的，不依赖系统 bounce。
+            web.scrollView.bounces = false
+            web.scrollView.alwaysBounceVertical = false
+            web.scrollView.alwaysBounceHorizontal = false
+            installBottomScrim(in: root)
             themeHandler = handler
         }
         startThemePoll()
@@ -270,6 +282,21 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         window?.rootViewController?.view.backgroundColor = color
         web.backgroundColor = .clear
         web.scrollView.backgroundColor = .clear
+        bottomScrim?.backgroundColor = color
+    }
+
+    /// 一块铺满窗口底部 140pt 的底色层，插在 WebView 之下。
+    private func installBottomScrim(in root: UIView) {
+        if let scrim = bottomScrim, scrim.superview != nil {
+            scrim.backgroundColor = window?.backgroundColor
+            return
+        }
+        let scrim = UIView(frame: CGRect(x: 0, y: root.bounds.height - 140, width: root.bounds.width, height: 140))
+        scrim.autoresizingMask = [.flexibleWidth, .flexibleTopMargin]
+        scrim.isUserInteractionEnabled = false
+        scrim.backgroundColor = window?.backgroundColor
+        root.insertSubview(scrim, at: 0)
+        bottomScrim = scrim
     }
 
     /// Every 1.5s, read the page's own --bg and match the window to it. This

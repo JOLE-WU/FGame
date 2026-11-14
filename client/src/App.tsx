@@ -14,7 +14,7 @@ type TouchEvent as ReactTouchEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SafeAreaTopScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
+import { SafeAreaTopScrim, SafeAreaBottomScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
 import { isNativePlatform, openPlatformLoginNative, onPlatformAuthCode } from "./auth-bridge";
 
@@ -474,7 +474,7 @@ const MiniRow = memo(function MiniRow({
   // 「iOS 内购限免」分类会变成同一句话说两遍，这里只留平台行。
   const platLine = (
     deal.tags.includes("iap")
-      ? platformZh(deal.platform)
+      ? "iOS · 内购"
       : [categoryLabel(deal), platformZh(deal.platform)].filter(Boolean).join(" · ")
   ).toUpperCase();
   return (
@@ -482,6 +482,7 @@ const MiniRow = memo(function MiniRow({
       role="button"
       tabIndex={0}
       aria-label={`查看详情：${title}`}
+      data-deal-row
       onClick={() => onOpen(deal)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -515,7 +516,9 @@ const MiniRow = memo(function MiniRow({
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">已在库</span>
           ) : null}
           {deal.tags.includes("iap") ? (
-            <span className="flex-none rounded-full bg-[var(--iap-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--iap-ink)]">内购限免</span>
+            <span className="flex-none rounded-full bg-[var(--iap-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--iap-ink)]">
+              {deal.platform.includes("内购限免") ? "内购限免" : "内购 0 元"}
+            </span>
           ) : null}
           {badge ? (
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">{badge}</span>
@@ -1051,7 +1054,10 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
           ) : null}
         </dl>
 
-        <AppPriceHistory deal={deal} />
+        {/* 内购限免条目的曲线画的是「App 本体价格」，本体本来就免费，
+            永远是一条「观测期内始终免费」的直线 —— 对用户没有信息量，
+            这一块直接不显示。 */}
+        {deal.externalId.startsWith("iosiap-") ? null : <AppPriceHistory deal={deal} />}
 
         {isIosFreeApp ? (
           <AppStoreProfile
@@ -1813,17 +1819,16 @@ function TodayPage(p: TodayProps) {
 
 function PriceRow({
   app,
-  deal,
-  onOpenDeal,
   watched,
   onToggleWatch,
+  onOpen,
 }: {
   app: AppPrice;
-  deal: Deal | null;
-  onOpenDeal: (d: Deal) => void;
   /** 降价行的关注存在本机（trackId 列表），不依赖它有没有关联 deal。 */
   watched?: boolean;
   onToggleWatch?: (app: AppPrice) => void;
+  /** 点整行进站内详情页（价格曲线 + 官方资料），不再直接跳 App Store。 */
+  onOpen: (app: AppPrice) => void;
 }) {
   const inner = (
     <>
@@ -1873,34 +1878,180 @@ function PriceRow({
       ) : null}
     </>
   );
-  const cls = "flex w-full items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md";
-  if (deal) {
-    return (
-      <div
-        role="button"
-        tabIndex={0}
-        aria-label={`查看详情：${app.name}`}
-        onClick={() => onOpenDeal(deal)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            onOpenDeal(deal);
-          }
-        }}
-        className={`${cls} cursor-pointer`}
-      >
-        {inner}
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-label={`查看降价详情：${app.name}`}
+      data-drop-row
+      onClick={() => onOpen(app)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen(app);
+        }
+      }}
+      className="flex w-full cursor-pointer items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md"
+    >
+      {inner}
+    </div>
+  );
+}
+
+/**
+ * 降价条目详情：先给站内的价格曲线与官方资料，再由用户决定去 App Store
+ * 还是加关注。没关联 deal 的降价行原先点一下就直接跳商店，站内看不到
+ * 任何依据，也和榜单 / Arcade 的交互不一致。
+ */
+function DropDetail({
+  app,
+  watched,
+  onToggleWatch,
+  onClose,
+}: {
+  app: AppPrice;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // 价格快照和「历史限免」曲线同一个数据源：按 trackId 取每日实测价。
+  const history = useQuery({
+    queryKey: ["freeHistory"],
+    queryFn: () => api.freeHistory({}),
+    staleTime: 30 * 60_000,
+  });
+  const rec = history.data?.apps.find((a) => a.trackId === app.trackId);
+  const points: PricePoint[] = (rec?.points ?? []).map((p) => ({ date: p.date, cents: p.cents }));
+  const rows: [string, string][] = [
+    ["当前价格", priceText(app.currentCents, app.currency)],
+    ["历史最高", priceText(app.wasCents, app.currency)],
+    ["降幅", app.isDrop ? `-${app.dropPct}%` : "较记录高点未降"],
+    ["首次记录", app.firstSnapshotDate],
+    ["最近核验", app.lastCheckedAt.slice(0, 10)],
+  ];
+
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`降价详情：${app.name}`}
+      data-drop-detail
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回降价列表"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">APP STORE · PRICE DROP</span>
+        </div>
       </div>
-    );
-  }
-  if (app.storeUrl) {
-    return (
-      <a href={app.storeUrl} target="_blank" rel="noreferrer" aria-label={`在 App Store 打开 ${app.name}`} className={cls}>
-        {inner}
-      </a>
-    );
-  }
-  return <div className={cls}>{inner}</div>;
+
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-28 pt-6">
+        <div className="flex items-center gap-4">
+          {app.iconUrl ? (
+            <img src={app.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
+          ) : (
+            <div className="grid h-[92px] w-[92px] flex-none place-items-center rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(app.name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            {app.isDrop ? (
+              <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">PRICE DROP · -{app.dropPct}%</div>
+            ) : (
+              <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--dim2)]">PRICE WATCH</div>
+            )}
+            <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <b className={`text-[17px] font-bold ${app.currentCents === 0 ? "text-[var(--free-ink)]" : "text-[var(--text)]"}`}>
+                {priceText(app.currentCents, app.currency)}
+              </b>
+              {app.isDrop ? (
+                <s className="font-mono text-[12px] text-[var(--dim2)]">{priceText(app.wasCents, app.currency)}</s>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <section className="mt-6" data-drop-chart>
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">价格曲线</h2>
+            <span className="font-mono text-[9px] text-[var(--dim2)]">APP STORE · 美区实测</span>
+          </div>
+          <div className="mt-2 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-3 shadow-[var(--glass-hi)]">
+            {history.isPending ? (
+              <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取历史价格…</p>
+            ) : points.length >= 2 ? (
+              <PriceChart points={points} currency={app.currency} name={app.name} />
+            ) : (
+              <p className="py-10 text-center text-sm text-[var(--dim)]">这款应用的每日快照还不够画曲线，几天后会自动补上。</p>
+            )}
+          </div>
+          <dl className="mt-3 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+            {rows.map(([k, v]) => (
+              <div key={k} className="flex justify-between gap-4">
+                <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+                <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2 font-mono text-[9px] leading-[1.7] text-[var(--dim2)]">
+            价格由本站每天调用 Apple 官方 Lookup 记录一次（美区），现价低于记录到的最高价才标为降价；不是实时行情，下单前以 App Store 显示为准。
+          </p>
+        </section>
+
+        <AppStoreProfile trackId={app.trackId} country="us" />
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-[var(--border)] bg-[var(--chrome-bg-strong)] px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2.5">
+        <div className="mx-auto flex w-full max-w-3xl gap-2">
+          <button
+            type="button"
+            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+            aria-pressed={watched}
+            onClick={onToggleWatch}
+            className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-[12px] border text-[13px] font-bold transition-colors ${
+              watched
+                ? "border-transparent bg-grad text-[var(--accent-ink)]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+            }`}
+          >
+            {watched ? "★ 已关注" : "☆ 加关注"}
+          </button>
+          {app.storeUrl ? (
+            <a
+              href={app.storeUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`在 App Store 打开 ${app.name}`}
+              className="flex h-11 flex-[1.4] items-center justify-center rounded-[12px] bg-grad text-[13px] font-bold text-[var(--accent-ink)]"
+            >
+              在 App Store 打开 ↗
+            </a>
+          ) : null}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }
 
 /**
@@ -3119,12 +3270,14 @@ function AppsPage({
   hideHidden: boolean;
   authToken?: string;
 }) {
-  const [chip, setChip] = useState<"all" | "free" | "iap" | "drop" | "watch">("all");
+  const [chip, setChip] = useState<"free" | "iap" | "drop" | "watch">("free");
   const [subTab, setSubTab] = useState<AppSubTab>("free");
   // 排行榜条目先落在应用内详情页，由详情页再决定去商店或加关注。
   const [detailRank, setDetailRank] = useState<{ app: RankingApp; meta: RankingMeta } | null>(null);
   // Arcade 条目同样先落在应用内详情页。
   const [detailArcade, setDetailArcade] = useState<ArcadeGame | null>(null);
+  // 降价条目也先落在应用内详情页（价格曲线 + 官方资料），再由用户决定去商店。
+  const [detailDrop, setDetailDrop] = useState<AppPrice | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -3271,7 +3424,6 @@ function AppsPage({
   );
   const apps = pricesQuery.data?.apps ?? [];
   const drops = apps.filter((a) => a.isDrop && (!q || a.name.toLowerCase().includes(q)));
-  const dealById = useMemo(() => new Map(deals.map((d) => [d.id, d])), [deals]);
 
   // 「我关注的」= 收藏过的应用条目（本体限免 + 内购限免，跨区服，不跟
   // 区服切换走；隐藏/已领开关也不影响，关注了就该看得见）+ 收藏过的
@@ -3311,13 +3463,6 @@ function AppsPage({
     apps.filter((a) => a.isDrop && watchTracks.includes(a.trackId)).length +
     storeWatch.length;
 
-  const watchMode = chip === "watch";
-  const freeList = watchMode ? watchFree : freeApps;
-  const iapList = watchMode ? watchIap : iapOnlyApps;
-  const dropList = watchMode ? watchDrops : drops;
-  const showFreeSec = chip === "free" || chip === "all" || (watchMode && freeList.length > 0);
-  const showIapSec = chip === "iap" || chip === "all" || (watchMode && iapList.length > 0);
-  const showDropSec = chip === "drop" || chip === "all" || (watchMode && dropList.length > 0);
   // 板块切换条要落在每个板块的「01 / xxx」标题之下，所以由父级生成、各板块
   // 自己插到标题后面；否则它会变成压在标题上方的第二条横条。
   const subTabsRow = (
@@ -3342,10 +3487,6 @@ function AppsPage({
       ))}
     </div>
   );
-  // 「01」留给板块页头，内部区块从 02 起编号。
-  const noFree = "02";
-  const noIap = showFreeSec ? "03" : "02";
-  const noDrop = showFreeSec ? (showIapSec ? "04" : "03") : showIapSec ? "03" : "02";
 
   return (
     <div>
@@ -3356,6 +3497,14 @@ function AppsPage({
           watched={storeWatchIds.has(detailRank.app.trackId)}
           onToggleWatch={() => toggleStoreWatch(rankingToStoreApp(detailRank.app))}
           onClose={() => setDetailRank(null)}
+        />
+      ) : null}
+      {detailDrop ? (
+        <DropDetail
+          app={detailDrop}
+          watched={watchTracks.includes(detailDrop.trackId)}
+          onToggleWatch={() => toggleTrack(detailDrop.trackId)}
+          onClose={() => setDetailDrop(null)}
         />
       ) : null}
       {detailArcade ? (
@@ -3378,15 +3527,38 @@ function AppsPage({
         <div className="mt-5">
       <SectionHead no="01" title="限免情报" en="IOS APP FREEBIES" />
       {subTabsRow}
-      <ChipsRow label="应用筛选">
-        {/* 五个 chip 要在 390px 宽里排得下：标签用短名，全称放 aria-label
-            和下面的区块标题里，横滑不必用户自己发现。 */}
-        <Chip active={chip === "all"} onClick={() => setChip("all")} label="全部" ariaLabel="全部应用" />
-        <Chip active={chip === "free"} onClick={() => setChip("free")} label="本体" count={countFree} ariaLabel="只看本体限免应用" />
-        <Chip active={chip === "iap"} onClick={() => setChip("iap")} label="内购" count={countIap} ariaLabel="只看内购限免应用" />
-        <Chip active={chip === "drop"} onClick={() => setChip("drop")} label="降价" count={countDrop} ariaLabel="只看降价应用" />
-        <Chip active={chip === "watch"} onClick={() => setChip("watch")} label="关注" count={countWatch} ariaLabel="只看我关注的" />
-      </ChipsRow>
+      {/* 分类改成一排横向切换页：本体限免 / 内购限免 / 降价 / 关注并排，
+          点哪个只看哪个，不再用「全部」把三块长列表叠在同一页里。 */}
+      <div
+        role="tablist"
+        aria-label="限免分类"
+        data-free-tabs
+        className="mb-1 flex gap-1 rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] p-1"
+      >
+        {(
+          [
+            { key: "free", label: "本体限免", n: countFree },
+            { key: "iap", label: "内购限免", n: countIap },
+            { key: "drop", label: "降价", n: countDrop },
+            { key: "watch", label: "关注", n: countWatch },
+          ] as const
+        ).map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={chip === t.key}
+            aria-label={`${t.label} ${t.n}`}
+            onClick={() => setChip(t.key)}
+            className={`flex min-w-0 flex-1 flex-col items-center gap-[3px] rounded-[10px] py-[7px] leading-none transition-colors ${
+              chip === t.key ? "bg-grad text-[var(--accent-ink)]" : "text-[var(--dim)]"
+            }`}
+          >
+            <span className="whitespace-nowrap text-[11.5px] font-bold">{t.label}</span>
+            <span className={`font-mono text-[9px] ${chip === t.key ? "opacity-80" : "text-[var(--dim2)]"}`}>{t.n}</span>
+          </button>
+        ))}
+      </div>
       <div className="relative mt-2">
         <input
           ref={searchRef}
@@ -3406,7 +3578,10 @@ function AppsPage({
         ) : null}
       </div>
       {/* 区服放在搜索框正下方：切一下就同时改变「本体限免」和
-          「App Store 全库」的检索范围，不用再滚到区块里找。 */}
+          「App Store 全库」的检索范围，不用再滚到区块里找。
+          内购限免 / 降价 / 关注都不跟区服筛选走，这时藏起来免得误以为
+          切区服能把它们筛掉；正在搜全库时仍然要显示。 */}
+      {chip === "free" || q.length >= 2 ? (
       <div className="mt-2.5 flex items-center gap-2">
         <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">区服</span>
         <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -3427,10 +3602,17 @@ function AppsPage({
           ))}
         </div>
       </div>
+      ) : null}
       <p className="mt-1.5 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        {region === "all"
-          ? "全部区服：本体限免展示已核验的全部条目 · 全库搜索按国区检索 · 输入 ≥2 字开始搜"
-          : `本体限免仅显示在${activeTab.label}官方核验为 ¥0 的条目，全库搜索也按${activeTab.label} · 领取需切换该区账号`}
+        {chip === "iap"
+          ? "内购限免跨区服核验（国区 / 美区 / 港区 / 日区 / 英区），命中哪个区就标哪个区，不受上面的区服筛选影响"
+          : chip === "drop"
+            ? "降价按美区 App Store 每日价格快照判断，不受上面的区服筛选影响；点条目进详情看价格曲线"
+            : chip === "watch"
+              ? "关注跨区服保存（存在本设备），不受区服筛选和「隐藏已领」影响"
+              : region === "all"
+                ? "全部区服：本体限免展示已核验的全部条目 · 全库搜索按国区检索 · 输入 ≥2 字开始搜"
+                : `本体限免仅显示在${activeTab.label}官方核验为 ¥0 的条目，全库搜索也按${activeTab.label} · 领取需切换该区账号`}
       </p>
 
       {q.length >= 2 ? (
@@ -3470,29 +3652,16 @@ function AppsPage({
         </>
       ) : null}
 
-      {watchMode && countWatch === 0 ? (
-        <EmptyNote
-          title="还没有关注的 App"
-          sub="在卡片右侧点 ☆（App Store 全库搜索结果、本体限免、内购限免、降价都能关注），或进详情点「收藏」；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
-        />
-      ) : null}
-
-      {showFreeSec ? (
+      {chip === "free" ? (
         <>
           <SectionHead
-            no={noFree}
+            no="02"
             title="本体限免"
-            en={
-              watchMode
-                ? "WATCHED · APP FREE"
-                : region === "all"
-                  ? "APP FREE · ALL REGIONS"
-                  : `APP FREE · ${activeTab.label.toUpperCase()}`
-            }
+            en={region === "all" ? "APP FREE · ALL REGIONS" : `APP FREE · ${activeTab.label.toUpperCase()}`}
           />
-          {freeList.length > 0 ? (
+          {freeApps.length > 0 ? (
             <div className="flex flex-col gap-[9px]">
-              {freeList.map((d) => {
+              {freeApps.map((d) => {
                 const codes = d.regions && d.regions.length ? d.regions : ["cn"];
                 const badge = codes.map((c) => IOS_REGION_LABEL[c] ?? c).join("·");
                 return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} onToggleSave={onToggleSave} />;
@@ -3513,47 +3682,44 @@ function AppsPage({
         </>
       ) : null}
 
-      {showIapSec ? (
+      {chip === "iap" ? (
         <>
-          {/* 内购限免：App 本体本来就免费，值钱的是某个内购此刻标价
-              ¥0.00。和上面的本体限免分开列，卡片上是紫色徽标。 */}
-          <SectionHead no={noIap} title="内购限免" en={watchMode ? "WATCHED · IN-APP" : "IN-APP · ¥0"} />
-          {watchMode ? null : (
-            <p className="mb-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-              内购价格逐条取自 App Store 官方应用页（国区页面）；标「内购限免」的是我们见过它收费、现在变 0 元，
-              标「内购 0 元」的是首次观察到的 0 元内购。
-            </p>
-          )}
-          {iapList.length > 0 ? (
+          <SectionHead no="03" title="内购限免" en="IN-APP · 0" />
+          {iapOnlyApps.length > 0 ? (
             <div className="flex flex-col gap-[9px]">
-              {iapList.map((d) => (
-                <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge="国区" onToggleSave={onToggleSave} />
-              ))}
+              {iapOnlyApps.map((d) => {
+                const codes = d.regions && d.regions.length ? d.regions : ["cn"];
+                const badge = codes.map((c) => IOS_REGION_LABEL[c] ?? c).join("·");
+                return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} onToggleSave={onToggleSave} />;
+              })}
             </div>
           ) : (
             <EmptyNote
               title={q ? "本站收录里没有匹配的内购限免" : "暂无内购限免"}
-              sub={q ? "上方 App Store 全库结果不受收录范围限制；清空搜索框可看全部已核验的内购限免。" : "每天会扫一遍 App Store 上带内购的免费 App，发现内购标价 0 元就收进来；这一批还没扫到。"}
+              sub={
+                q
+                  ? "上方 App Store 全库结果不受收录范围限制；清空搜索框可看全部已核验的内购限免。"
+                  : "每一轮都会逐区打开 App Store 官方应用页读内购标价（国区 / 美区 / 港区 / 日区 / 英区），发现本体免费且内购标 0 元就收进来。候选池 2000 多个 App 轮流扫，这一批暂时没扫到 0 元项。"
+              }
             />
           )}
         </>
       ) : null}
 
-      {showDropSec ? (
+      {chip === "drop" ? (
         <>
-          <SectionHead no={noDrop} title="降价" en={watchMode ? "WATCHED · PRICE DROPS" : "PRICE DROPS"} />
+          <SectionHead no="04" title="降价" en="PRICE DROPS" />
           {pricesQuery.isPending ? (
             <p className="py-8 text-center text-sm text-[var(--dim)]">加载中…</p>
-          ) : dropList.length > 0 ? (
+          ) : drops.length > 0 ? (
             <div className="flex flex-col gap-[9px]">
-              {dropList.map((a) => (
+              {drops.map((a) => (
                 <PriceRow
                   key={a.trackId}
                   app={a}
-                  deal={a.dealId != null ? (dealById.get(a.dealId) ?? null) : null}
-                  onOpenDeal={onOpen}
                   watched={watchTracks.includes(a.trackId)}
                   onToggleWatch={(x) => toggleTrack(x.trackId)}
+                  onOpen={(x) => setDetailDrop(x)}
                 />
               ))}
             </div>
@@ -3566,19 +3732,69 @@ function AppsPage({
         </>
       ) : null}
 
-      {/* 全库搜索结果关注的 App：不是 deal，单独一组回看。 */}
-      {watchMode && watchStore.length > 0 ? (
-        <>
-          <SectionHead no="05" title="关注的应用" en="WATCHED · APP STORE" />
-          <div className="flex flex-col gap-[9px]">
-            {watchStore.map((a) => (
-              <StoreRow key={a.trackId} app={a} watched onToggleWatch={toggleStoreWatch} />
-            ))}
-          </div>
-          <p className="mt-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-            这些是从 App Store 全库搜索结果里关注的 App，保存在本设备；换设备或清缓存不会同步。
-          </p>
-        </>
+      {chip === "watch" ? (
+        countWatch === 0 ? (
+          <EmptyNote
+            title="还没有关注的 App"
+            sub="在卡片右侧点 ☆（App Store 全库搜索结果、本体限免、内购限免、降价都能关注），或进详情点「收藏」；关注过的条目会一直留在这里，不受区服切换和「隐藏已领」影响。"
+          />
+        ) : (
+          <>
+            {watchFree.length > 0 ? (
+              <>
+                <SectionHead no="02" title="关注的本体限免" en="WATCHED · APP FREE" />
+                <div className="flex flex-col gap-[9px]">
+                  {watchFree.map((d) => {
+                    const codes = d.regions && d.regions.length ? d.regions : ["cn"];
+                    const badge = codes.map((c) => IOS_REGION_LABEL[c] ?? c).join("·");
+                    return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} onToggleSave={onToggleSave} />;
+                  })}
+                </div>
+              </>
+            ) : null}
+            {watchIap.length > 0 ? (
+              <>
+                <SectionHead no="03" title="关注的内购限免" en="WATCHED · IN-APP" />
+                <div className="flex flex-col gap-[9px]">
+                  {watchIap.map((d) => {
+                    const codes = d.regions && d.regions.length ? d.regions : ["cn"];
+                    const badge = codes.map((c) => IOS_REGION_LABEL[c] ?? c).join("·");
+                    return <MiniRow key={d.id} deal={d} now={now} onOpen={onOpen} badge={badge} onToggleSave={onToggleSave} />;
+                  })}
+                </div>
+              </>
+            ) : null}
+            {watchDrops.length > 0 ? (
+              <>
+                <SectionHead no="04" title="关注的降价" en="WATCHED · PRICE DROPS" />
+                <div className="flex flex-col gap-[9px]">
+                  {watchDrops.map((a) => (
+                    <PriceRow
+                      key={a.trackId}
+                      app={a}
+                      watched={watchTracks.includes(a.trackId)}
+                      onToggleWatch={(x) => toggleTrack(x.trackId)}
+                      onOpen={(x) => setDetailDrop(x)}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : null}
+            {watchStore.length > 0 ? (
+              <>
+                <SectionHead no="05" title="关注的应用" en="WATCHED · APP STORE" />
+                <div className="flex flex-col gap-[9px]">
+                  {watchStore.map((a) => (
+                    <StoreRow key={a.trackId} app={a} watched onToggleWatch={toggleStoreWatch} />
+                  ))}
+                </div>
+                <p className="mt-2 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
+                  这些是从 App Store 全库搜索结果里关注的 App，保存在本设备；换设备或清缓存不会同步。
+                </p>
+              </>
+            ) : null}
+          </>
+        )
       ) : null}
         </div>
       )}
@@ -7368,6 +7584,7 @@ export function App() {
   return (
     <div className="min-h-screen max-w-full overflow-x-clip bg-[var(--bg)] text-[var(--text)]">
       <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <SafeAreaBottomScrim />
       <PullRefreshIndicator indicatorRef={ptr.indicatorRef} phase={ptr.phase} stamp={ptr.stamp} />
       <main ref={ptr.contentRef} className="mx-auto w-full max-w-3xl px-[22px] pb-[92px]">
         {dealsQuery.isPending ? (

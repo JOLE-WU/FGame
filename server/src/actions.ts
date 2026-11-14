@@ -2733,7 +2733,12 @@ async function fetchAppStoreIap(trackId: number, cc = "cn"): Promise<IapPriceIte
     signal: AbortSignal.timeout(25_000),
   });
   if (!res.ok) throw new Error(`App Store HTTP ${res.status}`);
-  return parseAppStoreIap(await res.text());
+  const html = await res.text();
+  // 被限流 / 命中挑战页时 Apple 也可能回 200，但页面里没有商品注解。
+  // 这种情况必须当成「抓取失败」而不是「这个 App 没有内购」，否则会把
+  // 已经在列表里的条目误判成已恢复收费而错误下架。
+  if (!html.includes('"$kind":"Annotation"')) throw new Error("App Store page not served");
+  return parseAppStoreIap(html);
 }
 
 async function appRavenGql(query: string): Promise<Record<string, unknown>> {
@@ -2854,38 +2859,6 @@ async function buildIapPool(): Promise<Record<string, IapPoolEntry>> {
   return apps;
 }
 
-type IapAppLookup = {
-  trackId: number;
-  title: string;
-  bodyTier: number | null;
-  iaps: { name: string; tier: number }[];
-};
-
-/** 一次请求拿到一个 App 的全部内购档位。App 不在 AppRaven 里返回 null。 */
-async function fetchAppRavenIap(trackId: number): Promise<IapAppLookup | null> {
-  const data = await appRavenGql(
-    `query { appByITunesId(iTunesId: ${trackId}) { title priceTier inAppPurchases { title priceTier } } }`,
-  );
-  const app = data.appByITunesId as Record<string, unknown> | null | undefined;
-  if (!app) return null;
-  const iaps: { name: string; tier: number }[] = [];
-  const list = app.inAppPurchases;
-  if (Array.isArray(list)) {
-    for (const raw of list) {
-      if (typeof raw !== "object" || raw === null) continue;
-      const it = raw as Record<string, unknown>;
-      if (typeof it.title !== "string" || typeof it.priceTier !== "number") continue;
-      iaps.push({ name: it.title.trim(), tier: it.priceTier });
-    }
-  }
-  return {
-    trackId,
-    title: typeof app.title === "string" ? app.title : "",
-    bodyTier: typeof app.priceTier === "number" ? app.priceTier : null,
-    iaps,
-  };
-}
-
 /** Apple 官方 RSS 榜单（top-free）。AppRaven 的排序池只覆盖头部与
  *  新上架，榜单把「主流行」的免费 App 也带进来，防止漏掉不在池里的。 */
 async function fetchTopFreeIds(cc: string, limit = 100): Promise<number[]> {
@@ -2940,8 +2913,9 @@ async function fetchActivityIds(
   return out;
 }
 
-/** 每个内购的价格观察：tier 是最后一次看到的档位，paidTier 是最后
- *  一次看到的收费档位，zeroSince 是这一轮连续 0 元的起点。 */
+/** 每个内购的价格观察（key 为「区服:内购名」）：tier 是最后一次看到的
+ *  价格（分），paidTier 是最后一次看到的收费价（分），zeroSince 是这一轮
+ *  连续 0 元的起点。 */
 type IapObs = { tier: number; paidTier?: number; zeroSince?: string };
 type IapHistoryEntry = { firstSeen: string; items: Record<string, IapObs> };
 type IapHistory = Record<string, IapHistoryEntry>;
@@ -2991,7 +2965,7 @@ function iapInstructions(appName: string, zeroNames: string[], bodyFree: boolean
   return (
     (bodyFree ? "" : `先在 App Store 获取《${appName}》（本体免费）。\n`) +
     `打开 App，进入「升级 / Pro / 解锁完整版」内购页（有的在设置里）。\n` +
-    `下面这些内购项目当前标价 ¥0.00，选中它走正常购买流程即可，0 元不扣款：\n${list}\n` +
+    `下面这些内购项目当前标价为 0（页面上按区服显示 ¥0.00 / $0.00 / HK$0.00），选中它走正常购买流程即可，0 元不扣款：\n${list}\n` +
     `0 元内购同样记在这个 Apple 账号下；换机或重装后在 App 内点「恢复购买」即可找回。\n` +
     `内购价格取自 App Store 官方应用页，开发者随时可能改回原价 —— 下单前以购买弹窗显示的金额为准。`
   );
@@ -3000,20 +2974,118 @@ function iapInstructions(appName: string, zeroNames: string[], bodyFree: boolean
 /** 从未见过它收费的内购，连续这么多天都是 0 元就当长期免费，下架。 */
 const IAP_UNKNOWN_ZERO_DAYS = 10;
 
+/** 内购限免的核验区服 —— 不只看国区。内购促销经常只在一个区标 0 元
+ *  （美区最多，其次是国区/港区），只查国区会把整组扫成空。候选按顺序
+ *  试到第一个「本体免费 + 有内购 0 元」的区服就停，不为每个候选都把
+ *  五个区翻一遍；已收录的存量条目复查全部区服。 */
+const IAP_PROBE_REGIONS = ["cn", "us"] as const;
+const IAP_PROBE_REGIONS_KNOWN = ["cn", "us", "hk", "jp", "gb"] as const;
+/** 常年 0 元、不代表「限免」的内购项（恢复购买 / 运营商权益 / 促销位）。 */
+const IAP_ZERO_JUNK = /restore|恢复|t-?mobile|promo|special offer|优惠|trial|免费试用/i;
+
 type IapHit = {
   trackId: number;
+  cc: string;
   zeroNames: string[];
   limited: boolean;
   wasCents: number | null;
+  all: IapPriceItem[];
+  info: IosFreeLookupApp;
 };
 
+/** 一个 App 的跨区服核验：按区服顺序找「本体免费 + 至少一个内购 0 元」。
+ *  hit = null 表示当前没有可领的内购限免；conclusive = 至少一个区服真的
+ *  读到了内购清单（只有这种才允许拿它去下架已有条目，页面读不到不算
+ *  「已经恢复收费」）。stats.pages 记录真正拿到页面的次数，用来区分
+ *  「整批都不可达」和「这一批确实没有 0 元内购」。 */
+async function probeIapFree(
+  trackId: number,
+  regions: readonly string[],
+  history: IapHistory,
+  stats: { pages: number },
+  nowIso: string,
+  nowMs: number,
+): Promise<{ hit: IapHit | null; conclusive: boolean }> {
+  let conclusive = false;
+  for (const cc of regions) {
+    let all: IapPriceItem[];
+    try {
+      all = await fetchAppStoreIap(trackId, cc);
+      stats.pages++;
+    } catch {
+      continue;
+    }
+    if (all.length === 0) continue;
+    conclusive = true;
+    const zeroNames = all.filter((i) => i.cents === 0 && !IAP_ZERO_JUNK.test(i.name)).map((i) => i.name);
+    if (zeroNames.length === 0) continue;
+
+    let info: IosFreeLookupApp | undefined;
+    try {
+      info = (await itunesLookupByRegion([trackId], cc)).find((x) => x.trackId === trackId);
+    } catch {
+      continue;
+    }
+    // 本体必须在这个区免费：内购 0 元但本体收费，用户还得先掏钱买 App，
+    // 不符合「限免」的直觉。
+    if (!info || !info.trackName || info.price !== 0) continue;
+
+    const hist = history[String(trackId)] ?? { firstSeen: nowIso, items: {} };
+    let limited = false;
+    let wasCents: number | null = null;
+    for (const item of all) {
+      const key = `${cc}:${item.name}`;
+      const cents = item.cents ?? 0;
+      const obs = hist.items[key] ?? { tier: cents };
+      if (cents === 0) {
+        if (obs.tier > 0) {
+          obs.paidTier = obs.tier;
+          obs.zeroSince = nowIso;
+        } else if (!obs.zeroSince) {
+          obs.zeroSince = nowIso;
+        }
+        if (obs.paidTier != null && obs.paidTier > 0) {
+          limited = true;
+          // 只有美区的原价能直接按美元挂到卡片上；其他区服的原价写在
+          // 详情文案里（本地货币），不硬塞进 worthCents 冒充美元。
+          if (cc === "us") wasCents = Math.max(wasCents ?? 0, obs.paidTier);
+        }
+      } else {
+        obs.paidTier = cents;
+        delete obs.zeroSince;
+      }
+      obs.tier = cents;
+      hist.items[key] = obs;
+    }
+    history[String(trackId)] = hist;
+
+    // 从没见它收过费、只收「看着像解锁完整版」的项，并且连续 10 天都是
+    // 0 元的，当长期免费，不再占列表。
+    const accepted = zeroNames.filter((name) => {
+      const obs = hist.items[`${cc}:${name}`];
+      if (!obs) return false;
+      if (obs.paidTier != null && obs.paidTier > 0) return true; // 亲眼见过收费
+      if (!iapNameLooksLikeUnlock(name)) return false;
+      return !(obs.zeroSince && nowMs - new Date(obs.zeroSince).getTime() > IAP_UNKNOWN_ZERO_DAYS * 86_400_000);
+    });
+    if (accepted.length === 0) continue;
+    return { hit: { trackId, cc, zeroNames: accepted, limited, wasCents, all, info }, conclusive: true };
+  }
+  return { hit: null, conclusive };
+}
+
 /** 一轮内购限免扫描。返回 null 只在「发现层整体不可用」时（保留上次
- *  结果）；listed = 0 是正常的「这一批没有内购 0 元」。 */
+ *  结果）；listed = 0 是正常的「这一批没有内购 0 元」。
+ *
+ *  下架规则是这一版的重点：只下架「这一轮真的核验过、而且确实没有 0 元
+ *  内购」的条目。候选池有 2000 多个 App，一轮只扫得完一部分，原来的做法
+ *  是「不在本轮 keep 集合里就下架」，于是每轮都会把没轮到的条目全清掉 ——
+ *  这就是内购限免一会儿有一会儿整组空白的原因。 */
 async function syncIosIapFree(
   ctx: Ctx,
   opts: { limit?: number } = {},
 ): Promise<{ listed: number; checked: number; failed: number; cursor: number; pool: number } | null> {
-  const limit = opts.limit ?? 320;
+  const limit = opts.limit ?? 160;
   const db = ctx.db<typeof schema>();
   const existing = await db
     .select({
@@ -3026,174 +3098,130 @@ async function syncIosIapFree(
     .where(inArray(schema.deals.status, ["active", "upcoming"]));
 
   const pool = await buildIapPool();
-  const poolIds = Object.keys(pool);
+  // 本体免费（priceTier 0）或档位未知（榜单 / 动态流补进来的）都要扫：
+  // 后者没有内购档位信息，但恰好是限时促销最常出现的地方，本体是否免费
+  // 由后面的 Apple Lookup 现查。
+  const poolIds = Object.keys(pool).filter((k) => {
+    const tier = pool[k]?.priceTier;
+    return tier === 0 || tier == null;
+  });
   if (poolIds.length === 0) return null;
 
-  // 已收录的条目排在队首：本体限免行要复查是不是也挂着 0 元内购，
-  // 内购行要复查是不是还有 0 元项。
-  const priority: number[] = [];
+  // 存量条目优先复查：内购行要确认还有没有 0 元项，本体限免行要复查有
+  // 没有也挂着 0 元内购。这两类排在轮转池之前，保证已在列表里的条目
+  // 每一轮都被核验，不会因为慢速轮转而「自己掉下去」。
+  const knownIap: number[] = [];
+  const knownFree: number[] = [];
   for (const row of existing) {
     if (!row.externalId.startsWith("iosiap-") && !row.externalId.startsWith("iosfree-")) continue;
     const fromUrl = /\/id(\d{6,})/.exec(row.claimUrl ?? "");
     const id = fromUrl ? Number(fromUrl[1]) : Number(/(\d{6,})$/.exec(row.externalId)?.[1] ?? NaN);
-    if (Number.isFinite(id)) priority.push(id);
+    if (!Number.isFinite(id)) continue;
+    if (row.externalId.startsWith("iosiap-")) knownIap.push(id);
+    else if (row.tags.split(",").includes("iap")) knownIap.push(id);
+    else knownFree.push(id);
   }
+  const known = new Set([...knownIap, ...knownFree]);
+
   const cursor0 = readIapCursor();
   const rotated = [...poolIds.slice(cursor0), ...poolIds.slice(0, cursor0)];
   const targets: number[] = [];
   const queued = new Set<number>();
-  for (const id of [...priority, ...rotated.map(Number)]) {
+  for (const id of [...knownIap, ...knownFree, ...rotated.map(Number)]) {
     if (!Number.isFinite(id) || queued.has(id)) continue;
     queued.add(id);
     targets.push(id);
-    if (targets.length >= limit) break;
+    if (targets.length >= Math.max(limit, known.size)) break;
   }
 
-  let failed = 0;
-  let cursor = 0;
-  const hits: IapHit[] = [];
   const history = readIapHistory();
   const nowIso = new Date().toISOString();
   const nowMs = Date.now();
+  const stats = { pages: 0 };
+  let cursor = 0;
+  let failed = 0;
+  const hits: IapHit[] = [];
+  const checked = new Set<number>();
 
   await Promise.all(
-    Array.from({ length: Math.min(6, targets.length) }, async () => {
+    Array.from({ length: Math.min(5, targets.length) }, async () => {
       while (cursor < targets.length) {
         const trackId = targets[cursor++];
         if (trackId == null) break;
-        let look: IapAppLookup | null;
         try {
-          look = await fetchAppRavenIap(trackId);
+          const probe = await probeIapFree(
+            trackId,
+            known.has(trackId) ? IAP_PROBE_REGIONS_KNOWN : IAP_PROBE_REGIONS,
+            history,
+            stats,
+            nowIso,
+            nowMs,
+          );
+          if (probe.hit) hits.push(probe.hit);
+          // 只有「读到了内购清单、确实没有 0 元项」才算核验过；
+          // 页面没读到的一律保留原状。
+          if (probe.conclusive) checked.add(trackId);
         } catch {
           failed++;
-          continue;
-        }
-        if (!look) continue;
-        const hist = history[String(trackId)] ?? { firstSeen: nowIso, items: {} };
-        let zeroNames: string[] = [];
-        let limited = false;
-        let wasCents: number | null = null;
-        for (const iap of look.iaps) {
-          const obs = hist.items[iap.name] ?? { tier: iap.tier };
-          if (iap.tier === 0) {
-            if (obs.tier > 0) {
-              obs.paidTier = obs.tier;
-              obs.zeroSince = nowIso;
-            } else if (!obs.zeroSince) {
-              obs.zeroSince = nowIso;
-            }
-            const stale =
-              obs.zeroSince != null &&
-              nowMs - new Date(obs.zeroSince).getTime() > IAP_UNKNOWN_ZERO_DAYS * 86_400_000;
-            if (obs.paidTier != null && obs.paidTier > 0) {
-              // 强信号：我们亲眼见过它收费，现在 0 元 → 就是限时内购限免。
-              zeroNames.push(iap.name);
-              limited = true;
-              const usd = APPLE_US_PRICE_POINTS[obs.paidTier];
-              if (usd != null) wasCents = Math.max(wasCents ?? 0, Math.round(usd * 100));
-            } else if (!stale && iapNameLooksLikeUnlock(iap.name)) {
-              // 弱信号：从没见它收过费，只收「看起来是解锁完整版」的项
-              // ——「Platinum Restore」「T-Mobile 权益」这类常年 0 元的
-              // 权益项不是限免，别占列表。
-              zeroNames.push(iap.name);
-            }
-          } else {
-            obs.paidTier = iap.tier;
-            delete obs.zeroSince;
-          }
-          obs.tier = iap.tier;
-          hist.items[iap.name] = obs;
-        }
-        history[String(trackId)] = hist;
-        // 本体必须免费：内购 0 元但 App 本体收费对用户没意义（还得先掏
-        // 钱买 App），也不符合「限免」的直觉。
-        const bodyFree = look.bodyTier === 0 || (look.bodyTier == null && (pool[String(trackId)]?.priceTier ?? null) === 0);
-        if (zeroNames.length > 0 && bodyFree) hits.push({ trackId, zeroNames, limited, wasCents });
-      }
-    }),
-  );
-
-  // 发现层大面积失败 = AppRaven 侧不可达，保留上次结果不动。
-  if (targets.length >= 20 && failed / targets.length > 0.8) return null;
-
-  // ---- 核验层：只用 Apple 官方页面确认「现在确实是 0 元」----
-  const verified: { trackId: number; appleZero: string[]; appleAll: IapPriceItem[]; hit: IapHit }[] = [];
-  let verifyCursor = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(6, Math.max(1, hits.length)) }, async () => {
-      while (verifyCursor < hits.length) {
-        const hit = hits[verifyCursor++];
-        if (!hit) break;
-        try {
-          const all = await fetchAppStoreIap(hit.trackId, "cn");
-          const zero = all.filter((i) => i.cents === 0).map((i) => i.name);
-          if (zero.length > 0) verified.push({ trackId: hit.trackId, appleZero: zero, appleAll: all, hit });
-        } catch {
-          // 单个核验失败就跳过这一条，下一轮再说
         }
       }
     }),
   );
 
-  const meta = new Map<number, IosFreeLookupApp>();
-  if (verified.length > 0) {
-    const list = await itunesLookupByRegion(verified.map((v) => v.trackId), "cn");
-    for (const v of list) meta.set(v.trackId, v);
-  }
+  // 页面一个都没拿到 = Apple 侧不可达，保留上次结果不动。
+  if (targets.length >= 10 && stats.pages === 0) return null;
 
   const items: UpsertDeal[] = [];
   const mergedFree = new Set<number>();
   const keepIap = new Set<string>();
 
-  for (const v of verified) {
-    const info = meta.get(v.trackId);
-    // 国区拿不到这个 App（下架/未上架）就不列 —— 领不了的东西没意义。
-    if (!info || !info.trackName || info.price !== 0) continue;
-    const hist = history[String(v.trackId)];
-    const zeroNames = v.appleZero.filter((n) => !/restore|恢复|t-?mobile|promo|special offer|优惠|trial|免费试用/i.test(n));
-    if (zeroNames.length === 0) continue;
-    const priceLine = v.appleAll
+  for (const v of hits) {
+    const { info } = v;
+    const priceLine = v.all
       .filter((i) => i.priceText)
       .map((i) => `${i.name} ${i.priceText}`)
       .join("；");
-    const body = `当前 0 元内购（App Store 官方页面实测）：\n${zeroNames.map((n) => `· ${n} ¥0.00`).join("\n")}` +
+    const body =
+      `当前 0 元内购（App Store ${v.cc.toUpperCase()} 区官方页面实测）：\n` +
+      v.zeroNames.map((n) => `· ${n}`).join("\n") +
       (priceLine ? `\n\n全部内购现价：${priceLine}` : "");
+    const storeUrl =
+      info.trackViewUrl && new RegExp(`apps\\.apple\\.com/${v.cc}/`).test(info.trackViewUrl)
+        ? info.trackViewUrl
+        : `https://apps.apple.com/${v.cc}/app/id${v.trackId}`;
 
     // 已在「本体限免」里 → 合并标签，不建第二条同名卡片。
     const freeRow = existing.find((r) => r.externalId === `iosfree-${v.trackId}`);
     if (freeRow) {
       mergedFree.add(v.trackId);
-      const codes = (freeRow.regions ?? "cn").split(",").map((s) => s.trim()).filter(Boolean);
+      const codes = (freeRow.regions ?? v.cc).split(",").map((s) => s.trim()).filter(Boolean);
       await db
         .update(schema.deals)
         .set({
           tags: "ios,iap",
           platform: "iOS · 本体限免 + 内购限免",
-          instructionsZh: `${iosFreeInstructions(codes)}\n\n${iapInstructions(info.trackName, zeroNames, true)}`,
+          instructionsZh: `${iosFreeInstructions(codes)}\n\n${iapInstructions(info.trackName, v.zeroNames, true)}`,
           updatedAt: new Date(),
         })
         .where(eq(schema.deals.externalId, `iosfree-${v.trackId}`));
       continue;
     }
 
-    const storeUrl =
-      info.trackViewUrl && /apps\.apple\.com\/cn\//.test(info.trackViewUrl)
-        ? info.trackViewUrl
-        : `https://apps.apple.com/cn/app/id${v.trackId}`;
     keepIap.add(`iosiap-${v.trackId}`);
+    const hist = history[String(v.trackId)];
     items.push({
       externalId: `iosiap-${v.trackId}`,
       title: info.trackName,
       description: `${info.description}\n\n${body}`,
-      // 标题只放 App 名：卡片上的紫色「内购限免」徽标 + platform 行
-      // 已经说明这是内购条目，标题再缀一遍会同一屏出现三次同样的话。
+      // 标题只放 App 名：卡片上的紫色「内购限免」徽标 + platform 行已经
+      // 说明这是内购条目，标题再缀一遍会同一屏出现三次同样的话。
       titleZh: info.trackName,
       descriptionZh: `${info.description}\n\n${body}`,
-      instructionsZh: iapInstructions(info.trackName, zeroNames, false),
+      instructionsZh: iapInstructions(info.trackName, v.zeroNames, false),
       tags: "ios,iap",
-      platform: v.hit.limited ? "iOS · 内购限免" : "iOS · 内购 0 元",
+      platform: v.limited ? "iOS · 内购限免" : "iOS · 内购 0 元",
       source: "App Store 官方页面 · 内购价格核验",
-      worthCents: v.hit.wasCents,
+      worthCents: v.wasCents,
       imageUrl: info.artworkUrl512 ?? null,
       gallery: info.screenshotUrls.length > 0 ? JSON.stringify(info.screenshotUrls.slice(0, 10)) : null,
       claimUrl: storeUrl,
@@ -3202,17 +3230,16 @@ async function syncIosIapFree(
       endAt: null,
       status: "active",
       usersCount: null,
-      regions: "cn",
+      regions: v.cc,
     });
   }
 
-  // 之前挂过内购、这次 Apple 页面没有 0 元项了：本体限免行降级回纯本体
-  // 限免，独立的内购行交给 expireMissing 下架。
+  // 之前挂过内购、这次复查确认没有 0 元项了：本体限免行降级回纯本体限免，
+  // 独立的内购行下架。没被这一轮扫到的条目原样保留。
   for (const row of existing) {
-    const tags = row.tags.split(",");
-    if (!row.externalId.startsWith("iosfree-") || !tags.includes("iap")) continue;
+    if (!row.externalId.startsWith("iosfree-") || !row.tags.split(",").includes("iap")) continue;
     const id = Number(/(\d{6,})$/.exec(row.externalId)?.[1] ?? NaN);
-    if (Number.isFinite(id) && mergedFree.has(id)) continue;
+    if (!Number.isFinite(id) || !checked.has(id) || mergedFree.has(id)) continue;
     const codes = (row.regions ?? "cn").split(",").map((s) => s.trim()).filter(Boolean);
     await db
       .update(schema.deals)
@@ -3225,12 +3252,24 @@ async function syncIosIapFree(
       .where(eq(schema.deals.externalId, row.externalId));
   }
 
+  const iapRows = await db
+    .select({ id: schema.deals.id, externalId: schema.deals.externalId })
+    .from(schema.deals)
+    .where(inArray(schema.deals.status, ["active", "upcoming"]));
+  for (const row of iapRows) {
+    if (!row.externalId.startsWith("iosiap-")) continue;
+    if (keepIap.has(row.externalId)) continue;
+    const id = Number(/(\d{6,})$/.exec(row.externalId)?.[1] ?? NaN);
+    // 只有这一轮真的核验过的才下架；没轮到的保持原状。
+    if (!Number.isFinite(id) || !checked.has(id)) continue;
+    await db.update(schema.deals).set({ status: "expired" }).where(eq(schema.deals.id, row.id));
+  }
+
   writeJsonData("iap-price-history.json", history);
-  const nextCursor = (cursor0 + targets.length) % poolIds.length;
+  const nextCursor = (cursor0 + Math.min(targets.length, limit)) % poolIds.length;
   writeJsonData("iap-scan-state.json", { cursor: nextCursor, updatedAt: nowIso, pool: poolIds.length });
 
   await upsertDeals(ctx, items);
-  await expireMissing(ctx, ["iosiap-"], keepIap);
   return {
     listed: items.length + mergedFree.size,
     checked: targets.length,
@@ -5417,7 +5456,7 @@ export const Actions = {
       // 可用时只少这一块，前面已落库的结果不受影响。
       let iapFreeCount = 0;
       try {
-        const iap = await syncIosIapFree(ctx, { limit: 80 });
+        const iap = await syncIosIapFree(ctx, { limit: 200 });
         if (iap) iapFreeCount = iap.listed;
       } catch (e) {
         errors.push(`iOS 内购限免同步失败：${e instanceof Error ? e.message : String(e)}`);
@@ -5739,11 +5778,11 @@ export const Actions = {
   }),
   refreshIosIapFree: defineAction({
     description:
-      "Scans the iOS in-app-purchase free list on its own: opens Apple's official App Store page for each candidate app (the rows already listed as iOS free, AppRaven's live price-change feed, and AppRaven's newest in-app-purchase apps), reads the in-app purchase block Apple server-renders into that page (name + current price), and lists every app whose body is free in the CN storefront and that currently prices at least one in-app purchase at zero. Rows attached to an existing iOS-free row are merged onto it (tags ios,iap) instead of duplicating the card; rows that stop pricing anything at zero are expired or downgraded. Prices are Apple's own, checked on every run.",
+      "Scans the iOS in-app-purchase free list on its own: for each candidate app it opens Apple's official App Store page — CN first, then US, and for rows already listed also HK/JP/GB — reads the in-app purchase block Apple server-renders into that page (name + current price), and lists every app whose body is free in that storefront and that currently prices at least one in-app purchase at zero. The storefront where the zero was found becomes the row's region, so the list is no longer CN-only. Rows attached to an existing iOS-free row are merged onto it (tags ios,iap) instead of duplicating the card; a row is expired or downgraded only when this very run re-checked it and found nothing at zero, so a slow rotating scan never wipes entries it did not look at. Prices are Apple's own, checked on every run.",
     request: z.object({ limit: z.number().int().min(20).max(400).optional() }),
     response: z.object({ ok: z.boolean(), listed: z.number(), checked: z.number(), failed: z.number() }),
     async handler(ctx, args) {
-      const r = await syncIosIapFree(ctx, { limit: args.limit ?? 320 });
+      const r = await syncIosIapFree(ctx, { limit: args.limit ?? 200 });
       ctx.invalidateQueries();
       if (!r) return { ok: false, listed: 0, checked: 0, failed: 0 };
       return { ok: true, listed: r.listed, checked: r.checked, failed: r.failed };

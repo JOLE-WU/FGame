@@ -193,6 +193,31 @@ export type ApiResponse<C, K extends keyof C> = C[K] extends (...a: any[]) => Pr
 /** Covers the status-bar / notch area with the app's base colour.
  *  In the original Space this came from the SDK; the CSS equivalent is
  *  enough once the WebView uses viewport-fit=cover (see index.html). */
+/** Covers the home-indicator strip with the bottom bar's colour.
+ *  iOS insets the WebView by the safe area, so the last few points at the
+ *  bottom belong to the native window: when the page rubber-bands at the
+ *  end of a scroll they show through as a black band (the window's default
+ *  colour). This strip keeps that area painted with the bar colour, and the
+ *  native side paints the same colour behind the WebView as a second layer. */
+export function SafeAreaBottomScrim({ backgroundColor }: { backgroundColor?: string }) {
+  return (
+    <div
+      aria-hidden="true"
+      data-safe-bottom
+      style={{
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        height: "env(safe-area-inset-bottom, 0px)",
+        background: backgroundColor ?? "var(--chrome-bg-strong)",
+        zIndex: 31,
+        pointerEvents: "none",
+      }}
+    />
+  );
+}
+
 export function SafeAreaTopScrim({ backgroundColor }: { backgroundColor?: string; children?: ReactNode }) {
   return (
     <div
