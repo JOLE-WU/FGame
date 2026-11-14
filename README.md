@@ -39,6 +39,11 @@
 
 | 19 | **板块切换条移到「01 / xxx」标题下方** | 反馈「三个切换页和 01/xxx 标题重叠了」。原因：切换条只有 `mt-3`、没有下边距，而板块的 `SectionHead` 是板块根节点的 `:first-child`，`first:mt-0` 让它的上边距归零 —— 于是标题紧贴切换条底边，`leading-none` 的中文衬线字形向上溢出，看起来被切换条「吃掉」了半截。改法：切换条改为由 `AppsPage` 生成、以 `tabs` prop 传给 `RankingBoard` / `ArcadeBoard`，各自插在自己的 `SectionHead` 之后；「限免情报」补一个板块页头 `01 / 限免情报`（`IOS APP FREEBIES`），让三个板块结构一致，内部区块编号顺延为 02 本体 / 03 内购 / 04 降价 / 05 关注。切换条本身加 `mt-1 mb-1`，与标题固定 14px 间距。实测三个板块：标题底 87px → 切换条顶 101px，间距 14px，无重叠、无裁切。 |
 
+| 20 | **「历史限免」独立板块移除，改成 App 详情页内的历史价格曲线** | 反馈「不要历史限免这一栏，我要在限免 App 详情页里看到这个 App 的历史价格曲线」。删掉 APP 页原来的「历史限免」整段（含其筛选与列表），改为在「本体限免 / 排行榜 / Arcade」三个板块点进 App 详情时渲染 `AppPriceHistory`：横轴为抓取日期、纵轴为当地货币价格，实线圆点＝本站每日实测的 Apple 官方价（`app_price_snapshots`），虚线空心点＝收录时记录的原价锚点（只有「原价→当前免费」两点时用它兜底），0 元处画绿色基准带。`realMax === 0`（观测期内一直免费）时不画无信息量的直线，改写「观测期内始终免费」。内购限免条目（`iosiap-*`）不渲染本体曲线，避免把「本体 0 元」曲线贴到内购 App 上误导。 |
+| 21 | **App 详情页补齐官方介绍与截图（含大图浏览）** | 详情页新增 `AppStoreProfile`：评分 / 评分人数卡、iPhone 与 iPad 截图画廊（缩略图用 `/460x0w.jpg`，点开走全屏 lightbox，支持 `←` / `→` / `Esc` 翻页）、「详细介绍」全文（默认折叠 5 行，可展开）、版本 / 大小 / 兼容性 / 语言 / 年龄分级等规格表，末尾附「此版本更新」。数据来自新增的服务端 action `appStoreDetail`（Apple iTunes Lookup 直取 `description` / `screenshotUrls` / `averageUserRating` / `fileSizeBytes` 等，`num()` 兼容 Apple 把 `fileSizeBytes` 返回成字符串的情况）。接口失败时降级到本站已有封面 + 收录简介，不留空白卡片。限免、排行榜、Arcade 三处详情共用同一组件。 |
+| 22 | **非中文介绍自动补中文译文（覆盖全部区服）** | 日区 / 美区 / 韩区 / 港区等非中文商店的介绍不再直接丢原文：服务端 `appStoreDetail` 先看国区同 `trackId` 是否有 Apple 官方中文（有就直接用，`descZhSource=official`），没有再走有道演示翻译分段机翻（每段 <850 字、最多 6 块并发，`errorCode` 是字符串 `"0"` 需宽松判断），结果按 `appdetail_zh:${country}:${trackId}` 落 `meta` 表复用。`needsTranslation` 改为按假名 / 谚文 / 汉字占比判断——此前「含汉字就算中文」把整篇日文误判成中文，导致日区详情直接显示日文。详情页「详细介绍」给中文 / 原文两个 tab，翻译未完成时先显示原文并挂「正在生成中文翻译」。同一套 `TranslatedIntro` 也接到 Epic / Steam / GOG 游戏详情与游戏库详情，非中文简介一律自动翻译。实测日区 U-NEXT（1039 个中文字）、美区纯英文条目均正常；港区繁体按「已是中文」保留，不做简繁转换。 |
+| 23 | **四分类横向切换 + 内购限免跨区服 + 降价进详情 + 底部黑边** | 四条反馈一次改完。① **底部黑边**：滑到底时 WKWebView 下方露出原生底色（录屏可见）。修法是双层兜底——原生 `AppDelegate.installBottomScrim()` 在 WebView 下面铺一块 140pt、颜色跟顶栏同步的底色层，并关掉 `scrollView.bounces / alwaysBounceVertical / alwaysBounceHorizontal`；Web 侧加 `SafeAreaBottomScrim`（`position:fixed; bottom:0; height:env(safe-area-inset-bottom)`，同底栏色）盖住安全区，滚动回弹时不再透出黑条。② **四个分类并排横向切换**：限免情报页内「本体限免 / 内购限免 / 降价 / 关注」改成一行横向 tab（`data-free-tabs`），与上方「限免情报 / 排行榜 / Arcade」两级结构并存；切到内购 / 降价 / 关注时隐藏区服行（这三个分类本身跨区）。③ **内购限免跨区服**：此前只核验国区、且「本轮没扫到就下架」，2000 个候选池一轮只扫 160 个，导致整组反复被清空。改为 `cn` + `us` 双区探针（已知区服再兜 `hk/jp/gb`），`probeIapFree()` 返回 `{hit, conclusive}`，**只下架本轮确证无 0 元项的条目**，抓取被限流（页面缺 `"$kind":"Annotation"`）时直接抛错不写空结论；池子放宽到 `tier === 0 || tier == null`，每轮上限提到 200。④ **降价条目进站内详情**：`PriceRow` 不再直接跳 App Store，改为 `DropDetail`——价格曲线 + 5 行统计（现价 / 原价 / 降幅 / 最低价 / 收录时间）+ 同一套 `AppStoreProfile`，底部才是「加关注 / 在 App Store 打开」。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
@@ -123,11 +128,20 @@ node scripts/prepare-ios.mjs
 open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → Archive
 ```
 
+### 版本记录（产物 / 文件名 / Info.plist / App 内显示必须一致）
+| 版本 | build | 产物文件名 | 内容 |
+|------|-------|-----------|------|
+| 1.0.12 | 18 | `FGame-v1.0.12-b18-unsigned.ipa` | Arcade 汇总 / 排行榜详情 / 下拉刷新 / 代理提示 |
+| 1.0.13 | 19 | `FGame-v1.0.13-b19-unsigned.ipa` | 历史限免曲线、Arcade 详情、排行榜详情进站内 |
+| 1.0.14 | 20 | `FGame-v1.0.14-b20-unsigned.ipa` | 价格曲线移入 App 详情、App Store 官方资料、全区服翻译、四分类横切、内购跨区、降价详情、底部黑边（第 20–23 行） |
+
+同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.14 (20)` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
+
 ---
 
 ## 五、相对原 Space 的降级说明（诚实清单）
 独立部署后，以下几项依赖 WorkBuddy 托管能力的功能会**优雅降级**（不报错、不影响主流程）：
-- **AI 中英翻译 / 应用介绍润色**：SDK 的 `inference.complete` 无对应开源实现，独立部署时跳过，条目保留英文原文（已有中文翻译的行不受影响）。
+- **AI 中英翻译 / 应用介绍润色**：SDK 的 `inference.complete` 无对应开源实现，独立部署时**不做 LLM 润色**；但 App 详情页的中文译文另有链路（国区官方中文 → 有道机翻兜底，见第 21/22 行），不依赖 LLM，照常工作。
 - **后台 agent 抓取 Epic 手游 discover 源**：`agent.spawnTask` 降级为 no-op；主抓取仍走直连，直连失败时保留上次数据。
 - **定时刷新**：原托管 cron 改为后端可选 `FGAME_AUTO_REFRESH=1` 自轮询。
 - **账号 / 验库 / 收藏 / 领取进度**：完全保留（都在 `actions.ts` + SQLite 里）。
