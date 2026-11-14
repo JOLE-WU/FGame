@@ -9,6 +9,7 @@ useState,
 type CSSProperties,
 type FormEvent,
 type ReactNode,
+type RefObject,
 type TouchEvent as ReactTouchEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -5716,10 +5717,265 @@ function TabBar({ tab, setTab }: { tab: MainTab; setTab: (t: MainTab) => void })
   );
 }
 
+// ---------- pull to refresh ----------
+
+/**
+ * The real scroll container is the SDK's fixed `[data-generated-space-root]`
+ * layer (React itself is mounted INTO it), not window/body. Full-screen
+ * overlays are separate `.v-scroll-only` / `[role=dialog]` containers with
+ * their own gestures (detail right-swipe-to-close), so the pull gesture must
+ * never start while one of them is open.
+ *
+ * Touch moves write straight to the DOM instead of calling setState: this
+ * page tree is ~6k lines and re-rendering it on every frame would stutter.
+ * React state only changes when the indicator LABEL changes.
+ */
+const PTR_MAX = 96;
+const PTR_READY = 62;
+type PtrPhase = "idle" | "pull" | "ready" | "refreshing" | "done";
+
+function PullRefreshIndicator({
+  indicatorRef,
+  phase,
+  stamp,
+}: {
+  indicatorRef: RefObject<HTMLDivElement | null>;
+  phase: PtrPhase;
+  stamp: string;
+}) {
+  const label =
+    phase === "ready"
+      ? "松开立即刷新"
+      : phase === "refreshing"
+        ? "正在刷新…"
+        : phase === "done"
+          ? `已更新 · ${stamp}`
+          : "下拉刷新";
+  return (
+    <div
+      ref={indicatorRef}
+      aria-live="polite"
+      aria-label={label}
+      data-ptr-indicator
+      className="pointer-events-none fixed left-1/2 z-[70] flex items-center gap-2 rounded-full border border-[var(--glass-edge)] bg-[var(--surface)] px-3.5 py-2 text-[11px] font-bold tracking-[0.04em] text-[var(--text)] shadow-[var(--glass-hi)] backdrop-blur-md"
+      style={{
+        top: "calc(env(safe-area-inset-top, 0px) + 8px)",
+        transform: "translate(-50%, -46px)",
+        opacity: 0,
+        willChange: "transform, opacity",
+      }}
+    >
+      {phase === "refreshing" ? (
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 animate-spin" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+          <path d="M20 11a8 8 0 1 0-2.3 6.1" />
+          <path d="M20 4v7h-7" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 4v14" />
+          <path d="m6 12 6 6 6-6" />
+        </svg>
+      )}
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function usePullToRefresh(onRefresh: () => Promise<void>) {
+  const contentRef = useRef<HTMLElement | null>(null);
+  const indicatorRef = useRef<HTMLDivElement | null>(null);
+  const [phase, setPhase] = useState<PtrPhase>("idle");
+  const [stamp, setStamp] = useState("");
+  const phaseRef = useRef<PtrPhase>("idle");
+  const pullRef = useRef(0);
+  const busyRef = useRef(false);
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
+
+  // These three only touch refs / DOM, so the mount-only effect below can
+  // safely close over the first render's copies.
+  const setLabel = (p: PtrPhase) => {
+    if (phaseRef.current === p) return;
+    phaseRef.current = p;
+    setPhase(p);
+  };
+  const placeIndicator = (pull: number) => {
+    const ind = indicatorRef.current;
+    if (!ind) return;
+    ind.style.transform = `translate(-50%, ${-46 + pull * 0.72}px)`;
+  };
+  const paint = (pull: number) => {
+    const content = contentRef.current;
+    const ind = indicatorRef.current;
+    if (content) {
+      content.style.transition = "none";
+      content.style.transform = pull > 0 ? `translateY(${pull}px)` : "none";
+    }
+    if (ind) {
+      ind.style.transition = "none";
+      ind.style.opacity = String(Math.min(1, pull / 28));
+      placeIndicator(pull);
+    }
+  };
+  const settle = (to: number) => {
+    const content = contentRef.current;
+    const ind = indicatorRef.current;
+    if (content) {
+      content.style.transition = "transform 240ms cubic-bezier(.2,.8,.2,1)";
+      content.style.transform = to > 0 ? `translateY(${to}px)` : "none";
+    }
+    if (ind) {
+      ind.style.transition = "opacity 240ms ease, transform 240ms cubic-bezier(.2,.8,.2,1)";
+      if (to > 0) placeIndicator(to);
+      else ind.style.opacity = "0";
+    }
+    window.setTimeout(() => {
+      if (content) content.style.transition = "none";
+      if (ind) ind.style.transition = "none";
+    }, 250);
+  };
+
+  useEffect(() => {
+    const scroller =
+      document.querySelector<HTMLElement>("[data-generated-space-root]") ?? document.documentElement;
+    type Gesture = { active: boolean; started: boolean; x: number; y: number };
+    let g: Gesture | null = null;
+
+    const blocked = (target: EventTarget | null): boolean => {
+      // Any open overlay owns its own scrolling / swipe-back gesture.
+      if (document.querySelector('[role="dialog"], .ptr-ignore')) return true;
+      const el = target as HTMLElement | null;
+      if (!el?.closest) return false;
+      // Text inputs keep their native behaviour. Horizontal strips (chips,
+      // screenshot galleries) are intentionally NOT excluded: the masthead
+      // sits directly above a chip row, so most real pulls start there.
+      // A horizontal drag is handed back to the browser by onMove instead.
+      return !!el.closest('input, textarea, select, [contenteditable="true"]');
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (busyRef.current || e.touches.length !== 1 || blocked(e.target)) return;
+      // Which element actually scrolls depends on the host: inside the
+      // WorkBuddy space shell the SDK pins [data-generated-space-root] as a
+      // fixed overflow:auto layer, while the standalone iOS WKWebView (and
+      // local preview) scrolls window/documentElement. Check BOTH — using
+      // only scroller.scrollTop would let a pull fire mid-page because that
+      // value stays 0 when it is not the scroller.
+      const top = Math.max(
+        window.scrollY || 0,
+        document.documentElement.scrollTop || 0,
+        document.body.scrollTop || 0,
+        scroller === document.documentElement ? 0 : scroller.scrollTop || 0,
+      );
+      if (top > 1) return;
+      const t = e.touches[0];
+      if (!t) return;
+      g = { active: true, started: false, x: t.clientX, y: t.clientY };
+      pullRef.current = 0;
+    };
+
+    const onMove = (e: TouchEvent) => {
+      if (!g?.active || busyRef.current || e.touches.length !== 1) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dy = t.clientY - g.y;
+      const dx = t.clientX - g.x;
+      if (!g.started) {
+        if (dy < 8) return; // not a pull yet — let taps and normal scrolls through
+        if (dy < Math.abs(dx) * 1.1) {
+          g.active = false; // horizontal intent (chip row / swipe-back) wins
+          return;
+        }
+        g.started = true;
+      }
+      if (dy <= 0) {
+        paint(0);
+        pullRef.current = 0;
+        return;
+      }
+      // `overscroll-behavior: none` already kills the native rubber band;
+      // preventDefault stops any leftover scroll while we own the gesture.
+      if (e.cancelable) e.preventDefault();
+      const pull = Math.min(PTR_MAX, dy * 0.52);
+      pullRef.current = pull;
+      paint(pull);
+      setLabel(pull >= PTR_READY ? "ready" : "pull");
+    };
+
+    const onEnd = () => {
+      if (!g?.active) {
+        g = null;
+        return;
+      }
+      const { started } = g;
+      const pull = pullRef.current;
+      g = null;
+      if (!started || pull < 8) {
+        if (started) {
+          pullRef.current = 0;
+          settle(0);
+          setLabel("idle");
+        }
+        return;
+      }
+      if (pull < PTR_READY) {
+        pullRef.current = 0;
+        settle(0);
+        setLabel("idle");
+        return;
+      }
+      busyRef.current = true;
+      setLabel("refreshing");
+      settle(PTR_READY); // park the indicator while requests are in flight
+      const minDelay = new Promise<void>((resolve) => window.setTimeout(resolve, 700));
+      void Promise.allSettled([onRefreshRef.current(), minDelay]).then(() => {
+        setStamp(
+          new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
+        );
+        setLabel("done");
+        window.setTimeout(() => {
+          busyRef.current = false;
+          pullRef.current = 0;
+          settle(0);
+          setLabel("idle");
+        }, 1000);
+      });
+    };
+
+    const onCancel = () => {
+      if (g?.started) {
+        pullRef.current = 0;
+        settle(0);
+        setLabel("idle");
+      }
+      g = null;
+    };
+
+    scroller.addEventListener("touchstart", onStart, { passive: true });
+    scroller.addEventListener("touchmove", onMove, { passive: false });
+    scroller.addEventListener("touchend", onEnd, { passive: true });
+    scroller.addEventListener("touchcancel", onCancel, { passive: true });
+    return () => {
+      scroller.removeEventListener("touchstart", onStart);
+      scroller.removeEventListener("touchmove", onMove);
+      scroller.removeEventListener("touchend", onEnd);
+      scroller.removeEventListener("touchcancel", onCancel);
+    };
+  }, []);
+
+  return { contentRef, indicatorRef, phase, stamp };
+}
+
 // ---------- app root ----------
 
 export function App() {
   const queryClient = useQueryClient();
+  // Pull-to-refresh re-fetches whatever this tab currently shows (deals,
+  // app prices, library, search results). Full source re-sync stays on the
+  // dedicated ↻ button — that one can take a minute and must not hold a
+  // spinner under the user's finger.
+  const handlePullRefresh = () => queryClient.refetchQueries({ type: "active" });
+  const ptr = usePullToRefresh(handlePullRefresh);
   const [session, setSession] = useState<Session | null>(() => loadSession());
   // Steam OpenID return: when Steam redirects back to this page's own
   // address, the assertion sits in the query string. Detect it before
@@ -5892,7 +6148,8 @@ export function App() {
   return (
     <div className="min-h-screen max-w-full overflow-x-clip bg-[var(--bg)] text-[var(--text)]">
       <SafeAreaTopScrim backgroundColor="var(--bg)" />
-      <main className="mx-auto w-full max-w-3xl px-[22px] pb-[92px]">
+      <PullRefreshIndicator indicatorRef={ptr.indicatorRef} phase={ptr.phase} stamp={ptr.stamp} />
+      <main ref={ptr.contentRef} className="mx-auto w-full max-w-3xl px-[22px] pb-[92px]">
         {dealsQuery.isPending ? (
           <p className="py-16 text-center text-sm text-[var(--dim)]">加载中…</p>
         ) : dealsQuery.error ? (
