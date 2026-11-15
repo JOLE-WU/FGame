@@ -2695,6 +2695,10 @@ function RegionPriceCompare({
   // 大部分 App 只在一部分区上架（国区独占很常见），未上架的别占一整行。
   const withPrice = rows.filter((r) => r.cny != null);
   const missing = rows.filter((r) => r.cny == null);
+  // 对照表（国/美/港/台/日/韩）记过这些区的官方名：说明上架过，只是这次没取到价格，
+  // 和「这个区根本没上架」不是一回事。
+  const listedNoPrice = missing.filter((r) => r.localName);
+  const notListed = missing.filter((r) => !r.localName);
   // 免费（含内购）的本地版没有可比价，0 元不参与「最低」；其余含本地发行版一起排。
   const cheapest = withPrice.find((r) => r.cny != null && r.cny > 0) ?? null;
   const current = rows.find((r) => r.cc === currentCc) ?? null;
@@ -2783,9 +2787,22 @@ function RegionPriceCompare({
               );
             })}
             {missing.length ? (
-              <p className="border-t border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[10px] leading-relaxed text-[var(--dim2)]" data-region-missing>
-                未上架：{missing.map((r) => `${r.cc.toUpperCase()} ${PRICE_REGION_LABEL[r.cc] ?? ""}`.trim()).join(" · ")}
-              </p>
+              <div className="border-t border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[10px] leading-relaxed text-[var(--dim2)]" data-region-missing>
+                {notListed.length ? (
+                  <p>
+                    未上架：
+                    {notListed.map((r) => `${r.cc.toUpperCase()} ${PRICE_REGION_LABEL[r.cc] ?? ""}`.trim()).join(" · ")}
+                  </p>
+                ) : null}
+                {listedNoPrice.length ? (
+                  <p className={notListed.length ? "mt-1" : ""} data-region-listed>
+                    对照表记过这些区上架、这次没取到价：
+                    {listedNoPrice
+                      .map((r) => `${r.cc.toUpperCase()} ${PRICE_REGION_LABEL[r.cc] ?? ""}（${r.localName}）`)
+                      .join(" · ")}
+                  </p>
+                ) : null}
+              </div>
             ) : null}
           </div>
           <p className="mt-2 text-[10px] leading-relaxed text-[var(--dim2)]">
@@ -2795,6 +2812,7 @@ function RegionPriceCompare({
             {aliases.length
               ? `标「本地版」的 ${aliases.length} 个区是当地单独上架的同一款（不同 trackId / bundleId，名称也本地化过），价格按该区实际售价显示；免费含内购的版本不参与最低价比较。`
               : ""}
+            海外区没有本区官方名，改用对照表里的美区英文名去检索，中文名直搜基本搜不到。
             点任意一行可看该区详情页。
           </p>
         </>

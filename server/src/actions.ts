@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import * as schema from "./schema";
 import { REGION_ALIAS_GROUPS, type RegionAliasGroup } from "./data/regionAlias";
+import { REGION_NAME_SELLERS, REGION_NAME_TABLE, type RegionNameRow } from "./data/regionNames";
 
 // ---------- shared shapes ----------
 
@@ -4831,6 +4832,8 @@ type RegionPriceOut = {
   match: RegionPriceMatch;
   /** match=alias 时说明它对应哪一款，例如「泰拉瑞亚 ↔ Terraria」。 */
   aliasOf: string | null;
+  /** 对照表记录的本区官方名（六区才有），用来证明「这个区确实上架过」。 */
+  localName?: string | null;
 };
 
 /** 名称归一化：去掉副标题标点与大小写差异，只留下可比较的主体。 */
@@ -4859,6 +4862,69 @@ for (const group of REGION_ALIAS_GROUPS) {
     if (!regionAliasByTrackId.has(id)) regionAliasByTrackId.set(id, group);
   }
 }
+
+// ---------- 各区官方名对照（iOS应用各区上架名对照表） ----------
+/** 对照表只覆盖国/美/港/台/日/韩；其余海外区的标题通常与美区一致，直接用美区名去搜。 */
+const REGION_NAME_CC_INDEX: Record<string, number> = { cn: 0, us: 1, hk: 2, tw: 3, jp: 4, kr: 5 };
+/** 名字反过来查 trackId：search 命中后能确认「这就是对照表里那款」。 */
+const trackIdsByAnyRegionName = new Map<string, number[]>();
+for (const [tid, names] of Object.entries(REGION_NAME_TABLE)) {
+  for (const n of names) {
+    if (!n) continue;
+    const key = normAppName(n);
+    if (key.length < 2) continue;
+    const at = trackIdsByAnyRegionName.get(key);
+    if (!at) trackIdsByAnyRegionName.set(key, [Number(tid)]);
+    else if (!at.includes(Number(tid))) at.push(Number(tid));
+  }
+}
+
+/** 该 trackId 在对照表里的六区官方名。 */
+function regionNameRow(trackId: number): RegionNameRow | null {
+  return REGION_NAME_TABLE[trackId] ?? null;
+}
+
+/**
+ * 某个区该用哪个名字去 search。
+ * 优先本区官方名；本区没记录（对照表只覆盖六区）就借美区英文名——国区中文名直搜海外区几乎必失败。
+ */
+function searchNameFor(trackId: number, cc: string, fallback: string): string | null {
+  const row = regionNameRow(trackId);
+  if (!row) return null;
+  const own = REGION_NAME_CC_INDEX[cc];
+  const ownName = own === undefined ? "" : row[own];
+  if (ownName && normAppName(ownName) !== normAppName(fallback)) return ownName;
+  const us = row[1];
+  if (us && normAppName(us) !== normAppName(fallback)) return us;
+  return null;
+}
+
+/** 对照表证明该区上架过（哪怕这次没取到价格），返回该区官方名。 */
+function listedNameFor(trackId: number, cc: string): string | null {
+  const row = regionNameRow(trackId);
+  if (!row) return null;
+  const own = REGION_NAME_CC_INDEX[cc];
+  const name = own === undefined ? "" : row[own];
+  return name || null;
+}
+
+/** 发行商归一化：忽略 Co./Ltd./Inc. 这类后缀与标点差异。 */
+function normVendor(raw: string): string {
+  return normAppName(raw)
+    .replace(
+      /\b(co|ltd|limited|inc|incorporated|llc|gmbh|pte|plc|corp|corporation|company|technology|technologies|network|software|holdings|group|pty|the)\b/g,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** bundleId 前两段大致等于「厂商命名空间」：com.tencent.ioshlddz 与 com.tencent.happypoker 同源。 */
+function bundleVendor(bundleId: string | null): string {
+  if (!bundleId) return "";
+  return bundleId.toLowerCase().split(".").slice(0, 2).join(".");
+}
+
 const APP_RANKING_TTL_MS = 10 * 60_000;
 const GAME_GENRE_IDS = new Set([
   6014, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009,
@@ -6348,6 +6414,7 @@ export const Actions = {
           iconUrl: z.string().nullable(),
           match: z.enum(["same", "alias", "none"]),
           aliasOf: z.string().nullable(),
+          localName: z.string().nullable().optional(),
         }),
       ),
     }),
@@ -6448,9 +6515,21 @@ export const Actions = {
        * 标题归一化相同或互含则认为是本区的本地化上架版本（例如日区片假名标题）。
        */
       const searchOne = async (cc: string): Promise<RegionPriceOut | null> => {
+        // 对照表有本区官方名时只搜它：这是同一款 App 在该区的真实标题，
+        // 比拿国区中文名去搜海外区准得多（中文名在海外区几乎搜不到东西）。
+        const listedName = searchNameFor(args.trackId, cc, refName);
+        const ownListed = listedNameFor(args.trackId, cc);
+        const searchTerms = [...new Set([...(listedName ? appNameTerms(listedName) : []), ...terms])].slice(
+          0,
+          listedName ? 1 : 2,
+        );
+        const nOwn = ownListed ? normAppName(ownListed) : "";
+        const tableSeller = REGION_NAME_SELLERS[args.trackId] ?? "";
+        const nVendor = tableSeller ? normVendor(tableSeller) : "";
+        const refVendor = bundleVendor(refBundle);
         let best: RegionPriceOut | null = null;
         let bestScore = 0;
-        for (const term of terms.slice(0, 2)) {
+        for (const term of searchTerms) {
           try {
             const res = await fetch(
               `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=${cc}&entity=software&limit=10`,
@@ -6465,14 +6544,26 @@ export const Actions = {
               const bundle = text(row.bundleId);
               const nName = normAppName(name);
               const nRef = normAppName(refName);
+              // 命中对照表里属于本 trackId 的任一区官方名，基本可以确认是同一款；
+              // 再用 bundleId 前缀 / 发行商排掉「同名不同厂」的山寨（海外版常换代理，不能要求完全相同）。
+              const inTable = trackIdsByAnyRegionName.get(nName)?.includes(args.trackId) ?? false;
+              const samePrefix = !!refVendor && bundleVendor(bundle) === refVendor;
+              const sameSeller = !!nVendor && normVendor(text(row.sellerName) ?? "") === nVendor;
               let score = 0;
               let match: RegionPriceMatch = "none";
               if (refBundle && bundle === refBundle) {
                 score = 100;
                 match = "same";
+              } else if (nOwn && nName === nOwn) {
+                // 与对照表记录的本区官方名逐字一致。
+                score = 96;
+                match = "alias";
+              } else if (inTable) {
+                score = samePrefix ? 94 : sameSeller ? 90 : 84;
+                match = "alias";
               } else if (nRef.length >= 2 && nName === nRef) {
                 // 标题完全一致才认：包含关系会把「攻略秘籍 For 泰拉瑞亚」这类第三方 App 也拉进来。
-                score = 70;
+                score = samePrefix || sameSeller ? 70 : 58;
                 match = "alias";
               }
               if (score > bestScore) {
@@ -6489,8 +6580,9 @@ export const Actions = {
       };
 
       if (terms.length) {
-        // 只补前几个缺口：每个区两次 search，全量补会把 Apple 的限流额度吃满。
-        const gaps = prices.filter((r) => r.match === "none").slice(0, 4);
+        // 只补前几个缺口：每个区一两次 search，全量补会把 Apple 的限流额度吃满。
+        // 有对照表官方名的区命中率更高，放宽到 6 个区。
+        const gaps = prices.filter((r) => r.match === "none").slice(0, 6);
         for (let i = 0; i < gaps.length; i += 4) {
           const found = await Promise.all(gaps.slice(i, i + 4).map((r) => searchOne(r.cc)));
           found.forEach((row, idx) => {
@@ -6501,6 +6593,10 @@ export const Actions = {
           });
         }
       }
+
+      // 对照表只覆盖国/美/港/台/日/韩：这几区即使这次没取到价格，也能告诉前端「本区官方名是什么」，
+      // 用来区分「这个区没上架」和「上架了但价格没抓到」。
+      for (const r of prices) r.localName = listedNameFor(args.trackId, r.cc);
 
       const at = Date.now();
       priceCompareCache.set(key, { at, prices });
