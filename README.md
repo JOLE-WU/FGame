@@ -159,7 +159,7 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.20 | 26 | —（尚未出包） | 跨区价格对比识别各区不同标题并显示本区名、点某区进入该区详情页（本区价格/资料/评价），`appStoreRegionPrices` 增加 name/bundleId/match 与搜索补位 |
 | 1.0.21 | 27 | —（尚未出包） | 同一款游戏跨区 SKU 对照表（图标 dHash 自动配对 7 组，国服/港台/日版互认），跨区价格对比双向补全 14 区 |
 | 1.0.22 | 28 | `FGame-v1.0.22-b28-unsigned.ipa` | 导入各区上架名对照表（3,448 行 × 6 区全量复核后导入 1,073 行差异行）：跨区比价改用「该区官方名／美区英文名」检索，海外区命中从 1/14 提升到 13–14/14，价格对比区分「未上架」与「上架但没取到价」（CI run 43694496741，commit 4fbe520） |
-| 1.0.23 | 29 | —（尚未出包） | 跨区 SKU 对照表 7 → 26 组（512px dHash+pHash 双指纹自动配对，剔除 Arcade 版与专业版误配），详情页补「免费+内购版本」口径说明；服务端即时生效，App 内看到新文案才需要出包 |
+| 1.0.23 | 29 | `FGame-v1.0.23-b29-unsigned.ipa` | 跨区 SKU 对照表 7 → 26 组（512px dHash+pHash 双指纹自动配对，剔除 Arcade 版与专业版误配），详情页补「免费+内购版本」口径说明（CI run 43696420064，commit 776986e） |
 
 同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.19` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 
