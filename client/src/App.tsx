@@ -4770,7 +4770,9 @@ function AppsPage({
             ) : null}
             {watchStore.length > 0 ? (
               <>
-                <div className="flex flex-col gap-[9px]">
+                {/* 这一组原来漏了 mt-4：只关注了 App Store 应用（没有限免/降价）时，
+                    卡片会直接顶到「本体｜内购｜降价｜关注」这行标签上。 */}
+                <div className="mt-4 flex flex-col gap-[9px]">
                   {watchStore.map((a) => (
                     <StoreRow
                       key={a.trackId}
