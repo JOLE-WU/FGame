@@ -2705,6 +2705,15 @@ function RegionPriceCompare({
   const saving = cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
   const aliases = rows.filter((r) => r.match === "alias");
   const renamed = withPrice.filter((r) => !sameTitle(r.name, currentName)).length;
+  // 同款在别的区是免费+内购（海外发行方换了商业模式）时，和买断价不是一套口径，
+  // 不能只说「当前区最便宜」就完事。
+  const freeLocal = withPrice.filter((r) => r.cny === 0 && r.match !== "same");
+  const freeLocalHint = freeLocal.length
+    ? `另有 ${freeLocal.length} 个区的同款是免费下载 + 内购版本（${freeLocal
+        .slice(0, 2)
+        .map((r) => PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase())
+        .join("、")}${freeLocal.length > 2 ? " 等" : ""}），与买断价不是一套口径，不计入最低价。`
+    : "";
 
   return (
     <section className="mt-6" data-region-prices>
@@ -2735,6 +2744,11 @@ function RegionPriceCompare({
                       ? `目前只有${PRICE_REGION_LABEL[currentCc] ?? currentCc.toUpperCase()}上架，其余区服未上架。`
                       : `当前区已经是这 ${withPrice.length} 个有货区里最便宜的。换算按当日汇率，仅供参考。`}
           </p>
+          {freeLocalHint ? (
+            <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim2)]" data-region-free-local>
+              {freeLocalHint}
+            </p>
+          ) : null}
           <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
             {withPrice.map((r, i) => {
               const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;

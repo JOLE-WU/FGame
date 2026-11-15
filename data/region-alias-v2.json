@@ -1,0 +1,814 @@
+{
+ "generatedAt": "2026-11-15T16:45:37+08:00",
+ "checked": 147,
+ "groups": [
+  {
+   "cn": 6755228041,
+   "cnName": "潜水员戴夫",
+   "cnBundle": "com.xd.dave.ios.cn",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "hk": {
+     "trackId": 6759962259,
+     "name": "DAVE THE DIVER",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.mintrocket.drmobile",
+     "seller": "MintRocket"
+    }
+   }
+  },
+  {
+   "cn": 1157863540,
+   "cnName": "泰拉瑞亚",
+   "cnBundle": "com.idreamsky.terraria",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 640364616,
+     "name": "Terraria",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.505games.terraria",
+     "seller": "505 Games (US), Inc."
+    },
+    "hk": {
+     "trackId": 1609910024,
+     "name": "泰拉瑞亞",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.terraria.global",
+     "seller": "X.D. Network Inc."
+    },
+    "tw": {
+     "trackId": 1609910024,
+     "name": "泰拉瑞亞",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.terraria.global",
+     "seller": "X.D. Network Inc."
+    },
+    "jp": {
+     "trackId": 6747169764,
+     "name": "Terraria+",
+     "d": 13,
+     "p": 4,
+     "bundleId": "com.505games.terrariaarcade",
+     "seller": "505 Games (US), Inc."
+    }
+   }
+  },
+  {
+   "cn": 6743148949,
+   "cnName": "盛世天下：女王的游戏",
+   "cnBundle": "com.n1studio.empress",
+   "cnSeller": "Shenzhen Tencent Tianyou Technology Ltd",
+   "hits": {
+    "us": {
+     "trackId": 6741892043,
+     "name": "Road to Empress",
+     "d": 19,
+     "p": 4,
+     "bundleId": "com.n1studio.sstx",
+     "seller": "Sixjoy Hong Kong Limited"
+    },
+    "hk": {
+     "trackId": 6741892043,
+     "name": "女王的遊戲：盛世天下",
+     "d": 19,
+     "p": 4,
+     "bundleId": "com.n1studio.sstx",
+     "seller": "Sixjoy Hong Kong Limited"
+    },
+    "tw": {
+     "trackId": 6749132733,
+     "name": "女王的遊戲-盛世天下",
+     "d": 19,
+     "p": 4,
+     "bundleId": "com.n1studio.sstxtw",
+     "seller": "ROCGAME PTE. LTD."
+    },
+    "jp": {
+     "trackId": 6741892043,
+     "name": "盛世天下：女帝への道",
+     "d": 19,
+     "p": 4,
+     "bundleId": "com.n1studio.sstx",
+     "seller": "Sixjoy Hong Kong Limited"
+    }
+   }
+  },
+  {
+   "cn": 1523446532,
+   "cnName": "重生细胞",
+   "cnBundle": "com.bilibili.deadcells.ios",
+   "cnSeller": "Shanghai Hode Information Technology Co.,Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 1389752090,
+     "name": "Dead Cells",
+     "d": 12,
+     "p": 4,
+     "bundleId": "com.playdigious.deadcells",
+     "seller": "Playdigious"
+    },
+    "hk": {
+     "trackId": 1389752090,
+     "name": "Dead Cells",
+     "d": 12,
+     "p": 4,
+     "bundleId": "com.playdigious.deadcells",
+     "seller": "Playdigious"
+    },
+    "tw": {
+     "trackId": 1389752090,
+     "name": "Dead Cells",
+     "d": 12,
+     "p": 4,
+     "bundleId": "com.playdigious.deadcells",
+     "seller": "Playdigious"
+    },
+    "jp": {
+     "trackId": 1389752090,
+     "name": "Dead Cells",
+     "d": 12,
+     "p": 4,
+     "bundleId": "com.playdigious.deadcells",
+     "seller": "Playdigious"
+    }
+   }
+  },
+  {
+   "cn": 6757729278,
+   "cnName": "劫后公司",
+   "cnBundle": "com.jhgsios.afterinc",
+   "cnSeller": "DIVASKY LIMITED",
+   "hits": {
+    "us": {
+     "trackId": 1631859420,
+     "name": "After Inc.",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.ndemiccreations.survivors",
+     "seller": "Ndemic Creations LTD"
+    },
+    "hk": {
+     "trackId": 1631859420,
+     "name": "劫後公司",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.ndemiccreations.survivors",
+     "seller": "Ndemic Creations LTD"
+    },
+    "tw": {
+     "trackId": 1631859420,
+     "name": "劫後公司",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.ndemiccreations.survivors",
+     "seller": "Ndemic Creations LTD"
+    }
+   }
+  },
+  {
+   "cn": 1544722749,
+   "cnName": "拣爱",
+   "cnBundle": "com.tencent.LoveChoice",
+   "cnSeller": "GUANGZHOU CHIYE CO., LIMITED",
+   "hits": {
+    "us": {
+     "trackId": 1596863467,
+     "name": "LoveChoice",
+     "d": 11,
+     "p": 6,
+     "bundleId": "com.akabastudio.lovechoice",
+     "seller": "GUANGZHOU CHIYE CO., LIMITED"
+    },
+    "hk": {
+     "trackId": 1596863467,
+     "name": "LoveChoice 揀愛",
+     "d": 11,
+     "p": 6,
+     "bundleId": "com.akabastudio.lovechoice",
+     "seller": "GUANGZHOU CHIYE CO., LIMITED"
+    },
+    "tw": {
+     "trackId": 1596863467,
+     "name": "LoveChoice 揀愛",
+     "d": 11,
+     "p": 6,
+     "bundleId": "com.akabastudio.lovechoice",
+     "seller": "GUANGZHOU CHIYE CO., LIMITED"
+    },
+    "jp": {
+     "trackId": 1596863467,
+     "name": "LoveChoice 択愛",
+     "d": 11,
+     "p": 6,
+     "bundleId": "com.akabastudio.lovechoice",
+     "seller": "GUANGZHOU CHIYE CO., LIMITED"
+    }
+   }
+  },
+  {
+   "cn": 1458460469,
+   "cnName": "人类跌落梦境",
+   "cnBundle": "com.xd.humanfallflat",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "hk": {
+     "trackId": 1611723264,
+     "name": "人類跌落夢境",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.hff.global",
+     "seller": "X.D. Network Inc."
+    },
+    "tw": {
+     "trackId": 1611723264,
+     "name": "人類跌落夢境",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.hff.global",
+     "seller": "X.D. Network Inc."
+    }
+   }
+  },
+  {
+   "cn": 6737795387,
+   "cnName": "鬼谷八荒",
+   "cnBundle": "com.guigugame.guigubahuang",
+   "cnSeller": "Guangzhou Dahuang Network Technology Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 6742472194,
+     "name": "Tale of Immortal",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.guigugame.guigubahuangoverseas",
+     "seller": "HKWENXINTECHNOLOGYLIMITED"
+    },
+    "hk": {
+     "trackId": 6742472194,
+     "name": "鬼谷八荒 Tale of Immortal",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.guigugame.guigubahuangoverseas",
+     "seller": "HKWENXINTECHNOLOGYLIMITED"
+    },
+    "tw": {
+     "trackId": 6742472194,
+     "name": "鬼谷八荒 Tale of Immortal",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.guigugame.guigubahuangoverseas",
+     "seller": "HKWENXINTECHNOLOGYLIMITED"
+    },
+    "jp": {
+     "trackId": 6742472194,
+     "name": "鬼谷八荒 Tale of Immortal",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.guigugame.guigubahuangoverseas",
+     "seller": "HKWENXINTECHNOLOGYLIMITED"
+    }
+   }
+  },
+  {
+   "cn": 6502489827,
+   "cnName": "大侠立志传",
+   "cnBundle": "com.xd.dxlzz.app",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 6711347049,
+     "name": "Hero's Adventure",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.dxlzz.global",
+     "seller": "X.D. Network Inc."
+    },
+    "hk": {
+     "trackId": 6711347049,
+     "name": "大俠立志傳",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.dxlzz.global",
+     "seller": "X.D. Network Inc."
+    },
+    "tw": {
+     "trackId": 6711347049,
+     "name": "大俠立志傳",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.dxlzz.global",
+     "seller": "X.D. Network Inc."
+    },
+    "jp": {
+     "trackId": 6711347049,
+     "name": "Hero's Adventure",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.dxlzz.global",
+     "seller": "X.D. Network Inc."
+    }
+   }
+  },
+  {
+   "cn": 1517349382,
+   "cnName": "群雄时代 - 单机三国战棋策略游戏",
+   "cnBundle": "com.slggames.hgsg.jp",
+   "cnSeller": "YanYue Technology Co., Ltd",
+   "hits": {
+    "us": {
+     "trackId": 1450144092,
+     "name": "三國志天下布武 - 單機戰棋策略遊戲",
+     "d": 15,
+     "p": 0,
+     "bundleId": "com.slggames.hgsg",
+     "seller": "YanYue Technology Co., Ltd"
+    },
+    "hk": {
+     "trackId": 1450144092,
+     "name": "三國志天下布武 - 單機戰棋策略遊戲",
+     "d": 15,
+     "p": 0,
+     "bundleId": "com.slggames.hgsg",
+     "seller": "YanYue Technology Co., Ltd"
+    },
+    "tw": {
+     "trackId": 1450144092,
+     "name": "三國志天下布武 - 單機戰棋策略遊戲",
+     "d": 15,
+     "p": 0,
+     "bundleId": "com.slggames.hgsg",
+     "seller": "YanYue Technology Co., Ltd"
+    }
+   }
+  },
+  {
+   "cn": 1197275827,
+   "cnName": "金十数据专业版-为交易而生",
+   "cnBundle": "com.jin10.pro",
+   "cnSeller": "Guangzhou Jinshi Information and Technology Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 901284508,
+     "name": "金十数据-一个交易工具",
+     "d": 16,
+     "p": 4,
+     "bundleId": "com.jin10.lgd",
+     "seller": "Guangzhou Jinshi Information and Technology Co., Ltd."
+    },
+    "hk": {
+     "trackId": 901284508,
+     "name": "金十数据-一个交易工具",
+     "d": 16,
+     "p": 4,
+     "bundleId": "com.jin10.lgd",
+     "seller": "Guangzhou Jinshi Information and Technology Co., Ltd."
+    },
+    "tw": {
+     "trackId": 901284508,
+     "name": "金十数据-一个交易工具",
+     "d": 16,
+     "p": 4,
+     "bundleId": "com.jin10.lgd",
+     "seller": "Guangzhou Jinshi Information and Technology Co., Ltd."
+    },
+    "jp": {
+     "trackId": 901284508,
+     "name": "金十数据-一个交易工具",
+     "d": 16,
+     "p": 4,
+     "bundleId": "com.jin10.lgd",
+     "seller": "Guangzhou Jinshi Information and Technology Co., Ltd."
+    }
+   }
+  },
+  {
+   "cn": 982227026,
+   "cnName": "聚爆Implosion",
+   "cnBundle": "com.longyuan.implosion",
+   "cnSeller": "chengdu longyuan Network Technology Co. Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 870322730,
+     "name": "Implosion - Never Lose Hope",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.rayark.implosion",
+     "seller": "Rayark International Limited"
+    },
+    "hk": {
+     "trackId": 870322730,
+     "name": "Implosion 聚爆",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.rayark.implosion",
+     "seller": "Rayark International Limited"
+    },
+    "tw": {
+     "trackId": 870322730,
+     "name": "Implosion 聚爆",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.rayark.implosion",
+     "seller": "Rayark International Limited"
+    },
+    "jp": {
+     "trackId": 870322730,
+     "name": "インプロージョン",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.rayark.implosion",
+     "seller": "Rayark International Limited"
+    }
+   }
+  },
+  {
+   "cn": 1584313012,
+   "cnName": "笼中窥梦",
+   "cnBundle": "com.xd.moncage.cn",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 1587860402,
+     "name": "Moncage",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.moncage.us",
+     "seller": "X.D. Network Inc."
+    },
+    "hk": {
+     "trackId": 1587860402,
+     "name": "籠中窺夢",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.moncage.us",
+     "seller": "X.D. Network Inc."
+    },
+    "tw": {
+     "trackId": 1587860402,
+     "name": "籠中窺夢",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.moncage.us",
+     "seller": "X.D. Network Inc."
+    }
+   }
+  },
+  {
+   "cn": 1329434099,
+   "cnName": "乱斗堂3",
+   "cnBundle": "com.obsidian.ldt3",
+   "cnSeller": "Obsidian Company Limited",
+   "hits": {
+    "us": {
+     "trackId": 1438490758,
+     "name": "ChaosFighters3",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.obsidian.ldt3tw",
+     "seller": "Obsidian Company Limited"
+    },
+    "hk": {
+     "trackId": 1438490758,
+     "name": "亂鬥堂3 - 熱血經典動作回合制手遊",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.obsidian.ldt3tw",
+     "seller": "Obsidian Company Limited"
+    },
+    "tw": {
+     "trackId": 1438490758,
+     "name": "亂鬥堂3 - 熱血經典動作回合制手遊",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.obsidian.ldt3tw",
+     "seller": "Obsidian Company Limited"
+    }
+   }
+  },
+  {
+   "cn": 6757136435,
+   "cnName": "绿水镇",
+   "cnBundle": "com.cottongame.greenpondtownpaid.cn",
+   "cnSeller": "COTTONGAME Network Technology Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 6757171842,
+     "name": "Green Pond Town",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.cottongame.greenpondtown",
+     "seller": "COTTONGAME Network Technology Co., Ltd."
+    },
+    "hk": {
+     "trackId": 6757171842,
+     "name": "Green Pond Town",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.cottongame.greenpondtown",
+     "seller": "COTTONGAME Network Technology Co., Ltd."
+    },
+    "tw": {
+     "trackId": 6757171842,
+     "name": "Green Pond Town",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.cottongame.greenpondtown",
+     "seller": "COTTONGAME Network Technology Co., Ltd."
+    },
+    "jp": {
+     "trackId": 6757171842,
+     "name": "Green Pond Town",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.cottongame.greenpondtown",
+     "seller": "COTTONGAME Network Technology Co., Ltd."
+    }
+   }
+  },
+  {
+   "cn": 1115520522,
+   "cnName": "姬魔恋战纪-单机剧情手游戏",
+   "cnBundle": "com.yile.jm",
+   "cnSeller": "shanghai YILE Information Technology Company Limited",
+   "hits": {
+    "hk": {
+     "trackId": 1376408577,
+     "name": "姬魔戀戰紀-三國後宮角色扮演回合制策略手遊",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.yile.jm.hant",
+     "seller": "shanghai YILE Information Technology Company Limited"
+    }
+   }
+  },
+  {
+   "cn": 1246083840,
+   "cnName": "荒野日记：孤岛",
+   "cnBundle": "com.dygame.hyqs",
+   "cnSeller": "Suzhou  sector 51 Network Technology  Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 1316830864,
+     "name": "Survival: Man vs. Wild",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.dygame.hyqs.multi",
+     "seller": "Suzhou  sector 51 Network Technology  Co., Ltd."
+    },
+    "hk": {
+     "trackId": 1448324119,
+     "name": "荒野求生-孤島冒險",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.dygame.hyqs.tw",
+     "seller": "Suzhou  sector 51 Network Technology  Co., Ltd."
+    },
+    "tw": {
+     "trackId": 1448324119,
+     "name": "荒野求生-孤島冒險",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.dygame.hyqs.tw",
+     "seller": "Suzhou  sector 51 Network Technology  Co., Ltd."
+    }
+   }
+  },
+  {
+   "cn": 6466390901,
+   "cnName": "旋转音律 Rotaeno",
+   "cnBundle": "com.xd.rotaeno.cn",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 1614771445,
+     "name": "Rotaeno",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.rotaeno",
+     "seller": "X.D. Network Inc."
+    },
+    "hk": {
+     "trackId": 1614771445,
+     "name": "Rotaeno - 旋轉音律",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.rotaeno",
+     "seller": "X.D. Network Inc."
+    },
+    "tw": {
+     "trackId": 1614771445,
+     "name": "Rotaeno - 旋轉音律",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.xd.rotaeno",
+     "seller": "X.D. Network Inc."
+    }
+   }
+  },
+  {
+   "cn": 6444508254,
+   "cnName": "汉末霸业",
+   "cnBundle": "com.longyoug.hanmo",
+   "cnSeller": "ChengDu LongYou Tech Ltd",
+   "hits": {
+    "us": {
+     "trackId": 1373057849,
+     "name": "ThreeKingdoms The Last Warlord",
+     "d": 9,
+     "p": 2,
+     "bundleId": "com.longyoug.hmby",
+     "seller": "ChengDu LongYou Tech Ltd"
+    },
+    "hk": {
+     "trackId": 1373057849,
+     "name": "三國志漢末霸業",
+     "d": 9,
+     "p": 2,
+     "bundleId": "com.longyoug.hmby",
+     "seller": "ChengDu LongYou Tech Ltd"
+    },
+    "tw": {
+     "trackId": 1373057849,
+     "name": "三國志漢末霸業",
+     "d": 9,
+     "p": 2,
+     "bundleId": "com.longyoug.hmby",
+     "seller": "ChengDu LongYou Tech Ltd"
+    },
+    "jp": {
+     "trackId": 1373057849,
+     "name": "三国志漢末霸業",
+     "d": 9,
+     "p": 2,
+     "bundleId": "com.longyoug.hmby",
+     "seller": "ChengDu LongYou Tech Ltd"
+    }
+   }
+  },
+  {
+   "cn": 1159266744,
+   "cnName": "双子 Gemini",
+   "cnBundle": "com.xd.gemini",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 1133737578,
+     "name": "Gemini -A Journey of Two Stars",
+     "d": 1,
+     "p": 2,
+     "bundleId": "com.echostonegames.gemini",
+     "seller": "Echostone Games LLC"
+    },
+    "jp": {
+     "trackId": 1133737578,
+     "name": "Gemini -A Journey of Two Stars",
+     "d": 1,
+     "p": 2,
+     "bundleId": "com.echostonegames.gemini",
+     "seller": "Echostone Games LLC"
+    }
+   }
+  },
+  {
+   "cn": 1626320298,
+   "cnName": "极速变色龙",
+   "cnBundle": "com.noodlecake.chameleonrunchina",
+   "cnSeller": "Noodlecake Studios Inc",
+   "hits": {
+    "us": {
+     "trackId": 1084860489,
+     "name": "Chameleon Run",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.noodlecake.chameleonrun",
+     "seller": "Noodlecake Studios Inc"
+    },
+    "hk": {
+     "trackId": 1084860489,
+     "name": "Chameleon Run",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.noodlecake.chameleonrun",
+     "seller": "Noodlecake Studios Inc"
+    }
+   }
+  },
+  {
+   "cn": 6446614518,
+   "cnName": "画中世界",
+   "cnBundle": "com.xd.gorogoa.ios",
+   "cnSeller": "X.D. Network Inc.",
+   "hits": {
+    "us": {
+     "trackId": 1269225754,
+     "name": "Gorogoa",
+     "d": 1,
+     "p": 0,
+     "bundleId": "com.annapurnainteractive.Gorogoa",
+     "seller": "Annapurna Games, LLC"
+    }
+   }
+  },
+  {
+   "cn": 1529075749,
+   "cnName": "重建家园",
+   "cnBundle": "com.cdyyjh.g2.cn",
+   "cnSeller": "Chengdu YouYiJingHong Technology Co., Ltd.",
+   "hits": {
+    "hk": {
+     "trackId": 1611462012,
+     "name": "重建家園",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.cdyyjh.g2.tw",
+     "seller": "Chengdu YouYiJingHong Technology Co., Ltd."
+    },
+    "tw": {
+     "trackId": 1611462012,
+     "name": "重建家園",
+     "d": 0,
+     "p": 0,
+     "bundleId": "com.cdyyjh.g2.tw",
+     "seller": "Chengdu YouYiJingHong Technology Co., Ltd."
+    }
+   }
+  },
+  {
+   "cn": 1500683068,
+   "cnName": "南瓜先生2九龙城寨",
+   "cnBundle": "com.lilithgames.mrpumpkin2.ios.cn",
+   "cnSeller": "Shanghai Lilith Network Technology Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 1499318054,
+     "name": "Mr Pumpkin 2: Walls of Kowloon",
+     "d": 1,
+     "p": 0,
+     "bundleId": "com.lilithgames.mrpumpkin2.ios",
+     "seller": "LilithGame Co., Ltd"
+    },
+    "hk": {
+     "trackId": 1499318054,
+     "name": "南瓜先生2：九龍城寨",
+     "d": 1,
+     "p": 0,
+     "bundleId": "com.lilithgames.mrpumpkin2.ios",
+     "seller": "LilithGame Co., Ltd"
+    },
+    "tw": {
+     "trackId": 1499319685,
+     "name": "南瓜先生2 九龍城寨",
+     "d": 1,
+     "p": 0,
+     "bundleId": "com.lilithgames.mrpumpkin2.ios.tw",
+     "seller": "Original Entertainment Co., Ltd."
+    }
+   }
+  },
+  {
+   "cn": 1579853413,
+   "cnName": "隐藏的家伙",
+   "cnBundle": "com.indienova.hiddenfolks",
+   "cnSeller": "FHLC Co., Ltd.",
+   "hits": {
+    "us": {
+     "trackId": 1133544923,
+     "name": "Hidden Folks",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.adriaandejongh.hiddenfolks",
+     "seller": "Hidden Folks B.V."
+    },
+    "hk": {
+     "trackId": 1133544923,
+     "name": "Hidden Folks",
+     "d": 2,
+     "p": 0,
+     "bundleId": "com.adriaandejongh.hiddenfolks",
+     "seller": "Hidden Folks B.V."
+    },
+    "tw": {
+     "trackId": 1584550483,
+     "name": "隱藏的傢伙+",
+     "d": 8,
+     "p": 6,
+     "bundleId": "com.adriaandejongh.hiddenfolks.applearcade",
+     "seller": "Adriaan de Jongh"
+    },
+    "jp": {
+     "trackId": 1584550483,
+     "name": "Hidden Folks+",
+     "d": 8,
+     "p": 6,
+     "bundleId": "com.adriaandejongh.hiddenfolks.applearcade",
+     "seller": "Adriaan de Jongh"
+    }
+   }
+  }
+ ]
+}
