@@ -3754,10 +3754,12 @@ function AppsPage({
               role="tab"
               aria-selected={chip === t.key}
               onClick={() => setChip(t.key)}
-              className={`border-b-2 pb-[3px] text-[13px] leading-none transition-colors ${
+              // 固定 18px 行高 + 伪元素下划线：不用 padding-bottom + border，
+              // 那样文字会被顶高，和右侧区服下拉的文字不在同一条水平线。
+              className={`relative h-[18px] text-[13px] leading-[18px] transition-colors after:absolute after:inset-x-0 after:bottom-0 after:h-[2px] after:rounded-full ${
                 chip === t.key
-                  ? "border-[var(--accent)] font-bold text-[var(--text)]"
-                  : "border-transparent text-[var(--dim2)]"
+                  ? "font-bold text-[var(--text)] after:bg-[var(--accent)]"
+                  : "text-[var(--dim2)] after:bg-transparent"
               }`}
             >
               {t.label}
@@ -3771,7 +3773,7 @@ function AppsPage({
             aria-label="App Store 区服"
             value={region}
             onChange={(e) => changeRegion(e.target.value)}
-            className="appearance-none rounded-full border border-[var(--border)] bg-[var(--surface2)] py-[4px] pl-2.5 pr-[19px] text-[11px] font-semibold leading-none text-[var(--dim)] outline-none focus:border-[var(--accent)]"
+            className="h-[18px] appearance-none rounded-full border border-[var(--border)] bg-[var(--surface2)] py-0 pl-2.5 pr-[19px] text-[11px] font-semibold leading-none text-[var(--dim)] outline-none focus:border-[var(--accent)]"
           >
             {IOS_REGION_TABS.map((t) => (
               <option key={t.code} value={t.code}>

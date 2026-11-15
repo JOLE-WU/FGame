@@ -50,6 +50,8 @@
 
 | 26 | **区服改小下拉 + 搜索结果点进站内详情** | 反馈「按你说的做个下拉切换」「搜索出来的应用游戏点进去也是详情页，现在直接跳转」。① 分类行右侧加一个小胶囊区服下拉（`data-region-select`，原生 `select` + `appearance-none` + 自绘 chevron，11px 字、`ml-auto` 靠右），切换写入 `localStorage.fgame-ios-region`，只影响「本体限免」的筛选口径与全库搜索 storefront；上一版删掉的 `changeRegion` 恢复。② `StoreRow` 新增 `onOpen`：搜索结果与「关注」页里的全库条目点整行进新的 `StoreDetail`（`data-store-detail`），含图标 / 价格 / 类别 / 开发者 / 评分 / 区服、`AppStoreProfile`（官方截图 + 详细介绍 + 中文翻译）与底部「加关注 / 在 App Store 打开」，不再整行直接跳 store。③ 外层用 `div[role=button]` 而不是 `<button>`，避免与卡片内 ☆ 按钮形成非法嵌套；☆ 的 `stopPropagation` 保证点星只关注、不打开详情。实测：「国区」下拉可切到美区/全部区服并落盘；搜索 19 条结果全部可点入，URL 不变、无 popup；点 ☆ 后 `data-store-detail` 计数仍为 0；关注页条目同样可点入；浅/深两套主题控制台零报错。 |
 
+| 27 | **分类行与区服下拉垂直对齐** | 反馈「下拉那个没有和左边的四个板块居中对齐」。四个 tab 原来是 `border-b-2` + `pb-[3px]` + `leading-none`（盒高 18px，但文字被顶到盒子顶部），下拉是 `py-[4px]`（盒高 21px），`items-center` 只对齐盒子，文字中心实际差 2～3px。改成两边都用固定 `h-[18px]`：tab 用 `leading-[18px]` + `after:` 伪元素 2px 下划线（不再靠 padding + border 撑高度），下拉改 `h-[18px] py-0`。实测：四个 tab 文字 rect 与 select 盒 rect 完全一致（117.5–135.5，中线 126.5）；像素扫描「本体」墨迹 36–70、「国区」39–68，中线差 0.5px，是 13px / 11px 字号本身的字面差。下划线离字底 2.7px，切 tab 时跟随且整行不跳动。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
