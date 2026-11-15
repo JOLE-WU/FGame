@@ -4816,6 +4816,8 @@ const APP_RANKING_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb",
 // 详情页「各区价格对比」覆盖的 storefront：核心大区 + 低价区（土/尼/埃）。
 const PRICE_COMPARE_COUNTRIES = ["cn", "hk", "tw", "jp", "kr", "sg", "us", "gb", "ca", "au", "in", "tr", "ng", "eg"];
 const PRICE_COMPARE_TTL_MS = 6 * 60 * 60_000;
+// 内购价来自商品页 HTML（Apple 没有对应的 JSON 接口），抓一次要 0.6–2MB，缓存久一点。
+const IAP_PRICE_TTL_MS = 12 * 60 * 60_000;
 type RegionPriceMatch = "same" | "alias" | "none";
 type RegionPriceOut = {
   cc: string;
@@ -4855,6 +4857,23 @@ function appNameTerms(raw: string): string[] {
   return [...new Set(terms)];
 }
 const priceCompareCache = new Map<string, { at: number; prices: RegionPriceOut[] }>();
+/** 内购价缓存：key = trackId + 区列表。 */
+const iapPriceCache = new Map<
+  string,
+  {
+    at: number;
+    rows: {
+      cc: string;
+      currency: string;
+      available: boolean;
+      count: number;
+      minPrice: number | null;
+      maxPrice: number | null;
+      minFormatted: string | null;
+      items: { name: string; price: string }[];
+    }[];
+  }
+>();
 /** trackId -> 它所属的「同一款游戏、不同区各一个 SKU」分组（由图标指纹建表）。 */
 const regionAliasByTrackId = new Map<number, RegionAliasGroup>();
 for (const group of REGION_ALIAS_GROUPS) {
@@ -6604,6 +6623,164 @@ export const Actions = {
         for (const k of [...priceCompareCache.keys()].slice(0, 100)) priceCompareCache.delete(k);
       }
       return { trackId: args.trackId, at, prices };
+    },
+  }),
+
+  appStoreIapPrices: defineAction({
+    description:
+      "Reads the in-app purchase list Apple publishes on a product page for each storefront (apps.apple.com/{cc}/app/id{id}), returning the lowest in-app price plus the listed items. Apple exposes no IAP endpoint in the iTunes Search API, so this parses the serialized page data; storefronts Apple redirects away from (by IP region) come back as available:false instead of borrowing another region's data. Cached 12 hours per trackId.",
+    request: z.object({
+      trackId: z.number().int().positive(),
+      countries: z.array(z.string().trim().min(2).max(2)).max(24).optional(),
+    }),
+    response: z.object({
+      trackId: z.number(),
+      at: z.number(),
+      rows: z.array(
+        z.object({
+          cc: z.string(),
+          currency: z.string(),
+          available: z.boolean(),
+          count: z.number(),
+          minPrice: z.number().nullable(),
+          maxPrice: z.number().nullable(),
+          minFormatted: z.string().nullable(),
+          items: z.array(z.object({ name: z.string(), price: z.string() })),
+        }),
+      ),
+    }),
+    async handler(_ctx, args) {
+      const wanted = (args.countries?.length ? args.countries : PRICE_COMPARE_COUNTRIES).map((c) => c.toLowerCase());
+      const list = [...new Set(wanted)].filter((c) => /^[a-z]{2}$/.test(c)).slice(0, 24);
+      const key = `${args.trackId}:${list.join(",")}`;
+      const cached = iapPriceCache.get(key);
+      if (cached && Date.now() - cached.at < IAP_PRICE_TTL_MS) {
+        return { trackId: args.trackId, at: cached.at, rows: cached.rows };
+      }
+
+      const CC_CURRENCY: Record<string, string> = {
+        cn: "CNY", hk: "HKD", tw: "TWD", jp: "JPY", kr: "KRW", sg: "SGD", us: "USD",
+        gb: "GBP", ca: "CAD", au: "AUD", in: "INR", tr: "TRY", ng: "NGN", eg: "EGP",
+      };
+      const ACCEPT_LANG: Record<string, string> = {
+        cn: "zh-CN,zh;q=0.9", tw: "zh-TW,zh;q=0.9", hk: "zh-HK,zh;q=0.9",
+        jp: "ja-JP,ja;q=0.9", kr: "ko-KR,ko;q=0.9",
+      };
+      // 和浏览器一致的请求头：Apple 对空 UA 的页面会走简化版，没有内购区块。
+      const UA =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+      /** "₺114,99" / "¥6.00" / "US$0.99" 都要读对，逗号还可能是千分位。 */
+      const parseMoney = (label: string): number | null => {
+        const raw = label.replace(/[^\d.,]/g, "");
+        if (!raw) return null;
+        const dot = raw.lastIndexOf(".");
+        const comma = raw.lastIndexOf(",");
+        let s = raw;
+        if (dot >= 0 && comma >= 0) s = comma > dot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
+        else if (comma >= 0) s = raw.length - comma - 1 === 3 ? raw.replace(/,/g, "") : raw.replace(",", ".");
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      };
+
+      type IapRow = {
+        cc: string;
+        currency: string;
+        available: boolean;
+        count: number;
+        minPrice: number | null;
+        maxPrice: number | null;
+        minFormatted: string | null;
+        items: { name: string; price: string }[];
+      };
+
+      const one = async (cc: string): Promise<IapRow> => {
+        const blank: IapRow = {
+          cc,
+          currency: CC_CURRENCY[cc] ?? "",
+          available: false,
+          count: 0,
+          minPrice: null,
+          maxPrice: null,
+          minFormatted: null,
+          items: [],
+        };
+        try {
+          const res = await fetch(`https://apps.apple.com/${cc}/app/id${args.trackId}`, {
+            headers: {
+              "User-Agent": UA,
+              Accept: "text/html,application/xhtml+xml",
+              "Accept-Language": ACCEPT_LANG[cc] ?? "en-US,en;q=0.9",
+            },
+            redirect: "follow",
+            signal: AbortSignal.timeout(20_000),
+          });
+          if (!res.ok) return blank;
+          // Apple 会按出口 IP 把别区页面 302 到本地 storefront：宁可缺这一行，也不能把别区价格冒充成本区。
+          const finalUrl = res.url ?? "";
+          if (finalUrl && !finalUrl.includes(`/${cc}/`)) return blank;
+          const html = await res.text();
+          const raw = html.match(/<script[^>]*id="serialized-server-data"[^>]*>([\s\S]*?)<\/script>/);
+          if (!raw?.[1]) return blank;
+          let doc: unknown;
+          try {
+            doc = JSON.parse(raw[1]);
+          } catch {
+            return blank;
+          }
+          let annotation: Record<string, unknown> | null = null;
+          const walk = (node: unknown, depth = 0): void => {
+            if (!node || annotation || depth > 48) return;
+            if (Array.isArray(node)) {
+              for (const v of node) walk(v, depth + 1);
+              return;
+            }
+            if (typeof node !== "object") return;
+            const obj = node as Record<string, unknown>;
+            if (obj.$kind === "Annotation" && /内购|In-App Purchase/i.test(String(obj.title ?? ""))) {
+              annotation = obj;
+              return;
+            }
+            for (const v of Object.values(obj)) walk(v, depth + 1);
+          };
+          walk(doc);
+          const hit = annotation as Record<string, unknown> | null;
+          if (!hit) return blank;
+          const items = ((hit.items as Record<string, unknown>[] | undefined) ?? [])
+            .filter((i) => i && i.$kind === "textPair")
+            .map((i) => ({ name: String(i.leadingText ?? "").trim(), price: String(i.trailingText ?? "").trim() }))
+            .filter((i) => i.name && i.price);
+          const priced = items
+            .map((i) => ({ ...i, n: parseMoney(i.price) }))
+            .filter((i): i is { name: string; price: string; n: number } => i.n != null && i.n > 0);
+          const min = priced.length ? priced.reduce((a, b) => (b.n < a.n ? b : a)) : null;
+          const max = priced.length ? priced.reduce((a, b) => (b.n > a.n ? b : a)) : null;
+          return {
+            ...blank,
+            // 页面解析成功就说明这一区能读到（哪怕 App 确实没有内购，count 为 0）。
+            available: true,
+            count: items.length,
+            minPrice: min?.n ?? null,
+            maxPrice: max?.n ?? null,
+            minFormatted: min?.price ?? null,
+            items: items.slice(0, 10),
+          };
+        } catch {
+          return blank;
+        }
+      };
+
+      const rows: IapRow[] = [];
+      // 每个区要拉整张商品页（0.6–2MB），4 个一批既压住峰值也压住被限流的概率。
+      for (let i = 0; i < list.length; i += 4) {
+        rows.push(...(await Promise.all(list.slice(i, i + 4).map(one))));
+      }
+
+      const at = Date.now();
+      iapPriceCache.set(key, { at, rows });
+      if (iapPriceCache.size > 200) {
+        for (const k of [...iapPriceCache.keys()].slice(0, 60)) iapPriceCache.delete(k);
+      }
+      return { trackId: args.trackId, at, rows };
     },
   }),
 

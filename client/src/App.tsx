@@ -2671,6 +2671,9 @@ function RegionAppSheet({
  * Apple 给每个 App 一个全局 trackId，但标题会按区本地化，所以行里带上该区自己的名字，
  * 名称对不上时用 bundleId / 标题匹配补位，并标出「本地发行版」。
  */
+/** 国/印/日/美是主流比价口径，列表里着重标出来，扫一眼就能定位。 */
+const PRICE_FOCUS_REGIONS = new Set(["cn", "in", "jp", "us"]);
+
 function RegionPriceCompare({
   trackId,
   currentCc,
@@ -2711,8 +2714,6 @@ function RegionPriceCompare({
   const cheapest = withPrice.find((r) => r.cny != null && r.cny > 0) ?? null;
   const current = rows.find((r) => r.cc === currentCc) ?? null;
   const saving = cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
-  const aliases = rows.filter((r) => r.match === "alias");
-  const renamed = withPrice.filter((r) => !sameTitle(r.name, currentName)).length;
   // 同款在别的区是免费+内购（海外发行方换了商业模式）时，和买断价不是一套口径，
   // 不能只说「当前区最便宜」就完事。
   const freeLocal = withPrice.filter((r) => r.cny === 0 && r.match !== "same");
@@ -2761,6 +2762,7 @@ function RegionPriceCompare({
             {withPrice.map((r, i) => {
               const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;
               const renamedHere = !sameTitle(r.name, currentName);
+              const focused = PRICE_FOCUS_REGIONS.has(r.cc);
               return (
                 <button
                   key={r.cc}
@@ -2768,16 +2770,25 @@ function RegionPriceCompare({
                   onClick={() => onOpenRegion(r)}
                   data-region-row={r.cc}
                   data-region-match={r.match}
+                  data-region-focus={focused ? "1" : undefined}
                   aria-label={`${PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()} 价格 ${displayPrice(r.formattedPrice, r.currency)}，查看该区详情`}
                   className={`flex w-full items-center gap-2 px-3 py-[9px] text-left ${i ? "border-t border-[var(--border)]" : ""} ${
-                    r.cc === currentCc ? "bg-[var(--surface2)]" : ""
-                  } active:opacity-70`}
+                    r.cc === currentCc && !focused ? "bg-[var(--surface2)]" : ""
+                  } ${focused ? "bg-[var(--accent)]/[0.07] shadow-[inset_3px_0_0_var(--accent)]" : ""} active:opacity-70`}
                 >
-                  <span className="w-[22px] flex-none font-mono text-[9px] font-bold tracking-[0.04em] text-[var(--dim2)]">
+                  <span
+                    className={`w-[22px] flex-none font-mono text-[9px] font-bold tracking-[0.04em] ${
+                      focused ? "text-[var(--accent)]" : "text-[var(--dim2)]"
+                    }`}
+                  >
                     {r.cc.toUpperCase()}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] text-[var(--text)]">
+                    <span
+                      className={`block truncate text-[12px] ${
+                        focused ? "font-bold text-[var(--text)]" : "text-[var(--text)]"
+                      }`}
+                    >
                       {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
                       {r.cc === currentCc ? <span className="font-mono text-[9px] text-[var(--dim2)]">{" · 当前"}</span> : null}
                     </span>
@@ -2827,19 +2838,110 @@ function RegionPriceCompare({
               </div>
             ) : null}
           </div>
-          <p className="mt-2 text-[10px] leading-relaxed text-[var(--dim2)]">
-            {renamed
-              ? `各区标题会本地化，这 ${renamed} 个区的写法与当前区不同（行内第二行是本区名称）；同款按 Apple 的 trackId / bundleId 认定。`
-              : "各区标题一致，均按同一 trackId 认定。"}
-            {aliases.length
-              ? `标「本地版」的 ${aliases.length} 个区是当地单独上架的同一款（不同 trackId / bundleId，名称也本地化过），价格按该区实际售价显示；免费含内购的版本不参与最低价比较。`
-              : ""}
-            海外区没有本区官方名，改用对照表里的美区英文名去检索，中文名直搜基本搜不到。
-            点任意一行可看该区详情页。
-          </p>
         </>
       )}
+      <IapPriceCompare trackId={trackId} rows={withPrice} rates={rates} onOpenRegion={onOpenRegion} />
     </section>
+  );
+}
+
+/**
+ * 「本体 | 内购」两列对照。Apple 的 iTunes 接口不返回内购，内购价只能从各区商品页读取，
+ * 而且各区页面按访问来源放开（境外区在境内会被 302 重定向）——读不到的区显式标「—」，
+ * 不能拿别区的价格顶替。
+ */
+function IapPriceCompare({
+  trackId,
+  rows,
+  rates,
+  onOpenRegion,
+}: {
+  trackId: number;
+  rows: { cc: string; currency: string; formattedPrice: string | null; price: number | null }[];
+  rates: Record<string, number> | null;
+  onOpenRegion: (row: RegionPriceRow) => void;
+}) {
+  const query = useQuery({
+    queryKey: ["regionIap", trackId],
+    queryFn: () => api.appStoreIapPrices({ trackId }),
+    staleTime: 12 * 60 * 60_000,
+    retry: 1,
+  });
+  if (!rows.length) return null;
+  const byCc = new Map((query.data?.rows ?? []).map((r) => [r.cc, r]));
+  return (
+    <div className="mt-6" data-iap-prices>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h2 className="text-[13px] font-bold text-[var(--text)]">内购价格对比</h2>
+        <span className="font-mono text-[9px] text-[var(--dim2)]">本体 | 内购</span>
+      </div>
+      {query.isPending ? (
+        <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-5 text-center text-[12px] text-[var(--dim)]">
+          正在读取各区內购…
+        </p>
+      ) : (
+        <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
+          <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface2)] px-3 py-[6px] font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--dim2)]">
+            <span className="w-[22px] flex-none">区</span>
+            <span className="min-w-0 flex-1">区服</span>
+            <span className="w-[76px] flex-none text-right">本体</span>
+            <span className="w-[88px] flex-none text-right">内购</span>
+            <span className="w-[11px] flex-none" />
+          </div>
+          {rows.map((r, i) => {
+            const iap = byCc.get(r.cc);
+            const rate = rateFor(rates, iap?.currency ?? r.currency, r.cc);
+            const cny = iap?.minPrice != null && rate ? iap.minPrice / rate : null;
+            const focused = PRICE_FOCUS_REGIONS.has(r.cc);
+            return (
+              <button
+                key={r.cc}
+                type="button"
+                onClick={() => onOpenRegion(r as RegionPriceRow)}
+                data-iap-row={r.cc}
+                className={`flex w-full items-center gap-2 px-3 py-[8px] text-left ${i ? "border-t border-[var(--border)]" : ""} ${
+                  focused ? "bg-[var(--accent)]/[0.07] shadow-[inset_3px_0_0_var(--accent)]" : ""
+                } active:opacity-70`}
+              >
+                <span
+                  className={`w-[22px] flex-none font-mono text-[9px] font-bold ${
+                    focused ? "text-[var(--accent)]" : "text-[var(--dim2)]"
+                  }`}
+                >
+                  {r.cc.toUpperCase()}
+                </span>
+                <span className={`min-w-0 flex-1 truncate text-[12px] ${focused ? "font-bold" : ""} text-[var(--text)]`}>
+                  {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
+                </span>
+                <span className="w-[76px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
+                  {r.price === 0 ? "免费" : displayPrice(r.formattedPrice, r.currency)}
+                </span>
+                <span className="w-[88px] flex-none text-right">
+                  {iap?.available ? (
+                    iap.minPrice != null ? (
+                      <>
+                        <span className="block text-[11px] font-medium leading-tight text-[var(--text)]">
+                          {displayPrice(iap.minFormatted, iap.currency)}
+                          <span className="text-[9px] font-normal text-[var(--dim2)]"> 起</span>
+                        </span>
+                        <span className="block font-mono text-[9px] leading-tight text-[var(--accent)]">
+                          {cny != null ? `≈¥${cnyAmount(cny)}` : "汇率缺失"}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="text-[11px] text-[var(--dim2)]">无内购</span>
+                    )
+                  ) : (
+                    <span className="text-[11px] text-[var(--dim2)]">—</span>
+                  )}
+                </span>
+                <span aria-hidden className="w-[11px] flex-none font-mono text-[10px] text-[var(--dim2)]">›</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3123,7 +3225,16 @@ function RankRow({ app, cny, onOpen }: { app: RankingApp; cny?: string | null; o
   );
 }
 
-function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen?: (app: RankingApp, meta: RankingMeta) => void }) {
+function RankingBoard({
+  initialRegion,
+  search,
+  onOpen,
+}: {
+  initialRegion: string;
+  /** 页头那个搜索胶囊的输入：只筛当前榜单，不另发请求。 */
+  search?: string;
+  onOpen?: (app: RankingApp, meta: RankingMeta) => void;
+}) {
   const [cc, setCc] = useState(() => (initialRegion === "all" ? "cn" : initialRegion));
   const [kind, setKind] = useState<"apps" | "games">("apps");
   const [chart, setChart] = useState<"free" | "paid">("free");
@@ -3143,6 +3254,11 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
     staleTime: 10 * 60_000,
   });
   const apps = query.data?.apps ?? [];
+  // 排行榜只有 50 条，搜索直接在本地筛：名称和开发者都命中的才算。
+  const term = (search ?? "").trim().toLowerCase();
+  const shown = term
+    ? apps.filter((a) => a.name.toLowerCase().includes(term) || (a.sellerName ?? "").toLowerCase().includes(term))
+    : apps;
   const showCny = needsCnyPrice(cc, chart);
   const rates = useCnyRates(showCny);
   const meta: RankingMeta = {
@@ -3184,14 +3300,21 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
           {showCny ? (
             <p className="text-right font-mono text-[9px] text-[var(--dim)]">≈¥ 为人民币参考价</p>
           ) : null}
-          {apps.map((a) => (
-            <RankRow
-              key={`${a.trackId}-${a.rank}`}
-              app={a}
-              cny={showCny ? cnyApprox(a.price, rateFor(rates, a.currency, cc)) : null}
-              onOpen={onOpen ? (x) => onOpen(x, meta) : undefined}
+          {shown.length === 0 ? (
+            <EmptyNote
+              title="这一榜里没有匹配"
+              sub={`「${(search ?? "").trim()}」不在当前榜的前 50 名里，换区服或切换免费/付费榜再看看。`}
             />
-          ))}
+          ) : (
+            shown.map((a) => (
+              <RankRow
+                key={`${a.trackId}-${a.rank}`}
+                app={a}
+                cny={showCny ? cnyApprox(a.price, rateFor(rates, a.currency, cc)) : null}
+                onOpen={onOpen ? (x) => onOpen(x, meta) : undefined}
+              />
+            ))
+          )}
         </div>
       )}
     </div>
@@ -4364,14 +4487,13 @@ function AppsPage({
       <div className="flex items-end gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
-        {/* 搜索框缩成标题行右侧的小胶囊：它只筛「限免情报」里的条目与
-            App Store 全库结果，放到页头后不占正文一行；排行榜 / Arcade
-            各有自己的筛选，切过去时不显示，免得以为能在这里搜。 */}
-        {subTab === "free" ? (
+        {/* 搜索框缩成标题行右侧的小胶囊，和「限免情报」同一位置：限免页筛条目 +
+            App Store 全库，排行榜页筛当前榜单。Arcade 有自己的搜索框，切过去时不显示。 */}
+        {subTab === "free" || subTab === "ranking" ? (
           <div className="relative ml-auto w-[45%] max-w-[186px] flex-none">
             <input
               ref={searchRef}
-              aria-label="搜索应用"
+              aria-label={subTab === "ranking" ? "搜索当前榜单" : "搜索应用"}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => {
@@ -4385,7 +4507,7 @@ function AppsPage({
                 }
               }}
               enterKeyHint="search"
-              placeholder="搜索应用 / 全库"
+              placeholder={subTab === "ranking" ? "搜索当前榜单" : "搜索应用 / 全库"}
               className="h-[26px] w-full rounded-full border border-[var(--border)] bg-[var(--surface2)] pl-3 pr-8 text-[11.5px] leading-none text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
             />
             {search ? (
@@ -4402,7 +4524,7 @@ function AppsPage({
       {/* 三个板块切换条紧贴「应用」标题，正文里的「01 / xxx」再往下排。 */}
       <div className="mt-3">{subTabsRow}</div>
       {subTab === "ranking" ? (
-        <RankingBoard initialRegion={region} onOpen={(app, meta) => setDetailRank({ app, meta })} />
+        <RankingBoard initialRegion={region} search={search} onOpen={(app, meta) => setDetailRank({ app, meta })} />
       ) : subTab === "arcade" ? (
         <ArcadeBoard onOpen={(g) => setDetailArcade(g)} />
       ) : (
