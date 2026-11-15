@@ -2546,6 +2546,9 @@ function RegionAppSheet({
   const name = row.name ?? baseName;
   const isLocalRelease = row.match === "alias";
   const price = row.price === 0 ? "免费" : displayPrice(row.formattedPrice, row.currency);
+  // 上游「各区价格对比」每行都带 ≈¥，点进来只剩本币就失去了参照系：这里补同一套换算。
+  const rates = useCnyRates(row.price !== 0 && Boolean(row.formattedPrice));
+  const cny = row.price === 0 ? 0 : priceToCny(row.formattedPrice ?? "", rateFor(rates, row.currency, row.cc));
   useEffect(() => {
     // 捕获阶段截住 Esc，否则会连带把下面的榜单详情一起关掉。
     const onKey = (e: KeyboardEvent) => {
@@ -2617,7 +2620,12 @@ function RegionAppSheet({
         <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]" data-region-app-facts>
           <div className="flex justify-between gap-4">
             <dt className="shrink-0 text-[var(--dim)]">本区价格</dt>
-            <dd className="text-right font-medium text-[var(--text)]">{price}</dd>
+            <dd className="text-right font-medium text-[var(--text)]" data-region-app-price>
+              {price}
+              {cny != null && cny > 0 ? (
+                <span className="ml-1.5 font-normal text-[var(--dim)]">≈ ¥{cnyAmount(cny)}</span>
+              ) : null}
+            </dd>
           </div>
           <div className="flex justify-between gap-4">
             <dt className="shrink-0 text-[var(--dim)]">区服</dt>
