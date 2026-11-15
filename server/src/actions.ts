@@ -4777,6 +4777,33 @@ const appSearchCache = new Map<string, { at: number; rows: Record<string, unknow
 // 30 min so opening a detail page repeatedly does not hammer Apple.
 const APP_DETAIL_TTL_MS = 30 * 60_000;
 const appDetailCache = new Map<string, { at: number; row: Record<string, unknown> }>();
+// Apple customer-reviews RSS and developer-apps lookup — both cached 30 min.
+const appReviewsCache = new Map<string, { at: number; rows: ReviewEntry[] }>();
+const developerAppsCache = new Map<string, { at: number; data: DeveloperAppsResult }>();
+type ReviewEntry = {
+  id: string;
+  author: string | null;
+  title: string | null;
+  content: string | null;
+  rating: number | null;
+  version: string | null;
+  updated: string | null;
+};
+type DeveloperAppsResult = {
+  ok: boolean;
+  artistName: string | null;
+  apps: {
+    trackId: number;
+    name: string;
+    iconUrl: string | null;
+    genre: string | null;
+    rating: number | null;
+    ratingCount: number | null;
+    formattedPrice: string | null;
+    price: number | null;
+    storeUrl: string | null;
+  }[];
+};
 
 /* ------------------------------------------------------------------ */
 /* App Store 排行榜 / Apple Arcade                                     */
@@ -8084,6 +8111,8 @@ export const Actions = {
       rating: z.number().nullable(),
       ratingCount: z.number().nullable(),
       sellerName: z.string().nullable(),
+      artistId: z.number().nullable(),
+      artistName: z.string().nullable(),
       genres: z.array(z.string()),
       version: z.string().nullable(),
       minOsVersion: z.string().nullable(),
@@ -8154,6 +8183,8 @@ export const Actions = {
         rating: num(row?.averageUserRating),
         ratingCount: num(row?.userRatingCount),
         sellerName: str(row?.sellerName) ?? str(row?.artistName),
+        artistId: num(row?.artistId),
+        artistName: str(row?.artistName),
         genres: arr(row?.genres),
         version: str(row?.version),
         minOsVersion: str(row?.minimumOsVersion),
@@ -8213,6 +8244,153 @@ export const Actions = {
         }
       }
       return { ...detail, descriptionZh, releaseNotesZh, descZhSource, translating };
+    },
+  }),
+
+  /** Apple 官方用户评价（customer-reviews RSS）。按 trackId + 区服返回最近若干
+   *  条用户评分，字段含评分、版本、标题、正文、作者与时间。缓存 30 分钟。 */
+  appStoreReviews: defineAction({
+    description: "Apple App Store customer reviews for one app by trackId: rating, version, title, body, author and date. Cached 30 minutes.",
+    request: z.object({
+      trackId: z.number().int().positive(),
+      country: z.string().trim().min(2).max(5).optional(),
+    }),
+    response: z.object({
+      ok: z.boolean(),
+      country: z.string(),
+      reviews: z.array(
+        z.object({
+          id: z.string(),
+          author: z.string().nullable(),
+          title: z.string().nullable(),
+          content: z.string().nullable(),
+          rating: z.number().nullable(),
+          version: z.string().nullable(),
+          updated: z.string().nullable(),
+        }),
+      ),
+    }),
+    async handler(_ctx, args) {
+      const country = APP_SEARCH_COUNTRIES.has(args.country ?? "us") ? (args.country ?? "us") : "us";
+      const key = `${country}:${args.trackId}`;
+      const hit = appReviewsCache.get(key);
+      if (hit && Date.now() - hit.at < APP_DETAIL_TTL_MS) {
+        return { ok: true, country, reviews: hit.rows };
+      }
+      let reviews: ReviewEntry[] = [];
+      try {
+        const res = await fetch(
+          `https://itunes.apple.com/${country}/rss/customerreviews/id=${args.trackId}/json`,
+          { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12_000) },
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { feed?: { entry?: unknown[] } };
+          const entries = Array.isArray(data.feed?.entry) ? data.feed!.entry : [];
+          reviews = entries
+            .filter((e): e is Record<string, any> => !!e && typeof e === "object" && "im:rating" in (e as object))
+            .slice(0, 30)
+            .map((e) => {
+              const labelOf = (node: unknown): string | null =>
+                node && typeof node === "object" && typeof (node as Record<string, any>).label === "string"
+                  ? ((node as Record<string, any>).label as string)
+                  : null;
+              const numOf = (node: unknown): number | null => {
+                const s = labelOf(node);
+                return s != null && Number.isFinite(Number(s)) ? Number(s) : null;
+              };
+              return {
+                id: String(labelOf(e.id) ?? `${args.trackId}-${Math.random()}`),
+                author: labelOf((e as Record<string, any>).author?.name),
+                title: labelOf(e.title),
+                content: labelOf(e.content),
+                rating: numOf(e["im:rating"]),
+                version: labelOf(e["im:version"]),
+                updated: labelOf(e.updated),
+              };
+            });
+        }
+      } catch {
+        reviews = [];
+      }
+      appReviewsCache.set(key, { at: Date.now(), rows: reviews });
+      if (appReviewsCache.size > 160) {
+        for (const k of [...appReviewsCache.keys()].slice(0, 40)) appReviewsCache.delete(k);
+      }
+      return { ok: true, country, reviews };
+    },
+  }),
+
+  /** 某开发者名下全部 App（按 artistId）。用于详情页点开发者名进入「开发者」页。
+   *  缓存 30 分钟。 */
+  developerApps: defineAction({
+    description: "All App Store apps by one developer (artistId): list with icon, name, genre, rating and price for the developer page. Cached 30 minutes.",
+    request: z.object({
+      artistId: z.number().int().positive(),
+      country: z.string().trim().min(2).max(5).optional(),
+    }),
+    response: z.object({
+      ok: z.boolean(),
+      artistName: z.string().nullable(),
+      apps: z.array(
+        z.object({
+          trackId: z.number(),
+          name: z.string(),
+          iconUrl: z.string().nullable(),
+          genre: z.string().nullable(),
+          rating: z.number().nullable(),
+          ratingCount: z.number().nullable(),
+          formattedPrice: z.string().nullable(),
+          price: z.number().nullable(),
+          storeUrl: z.string().nullable(),
+        }),
+      ),
+    }),
+    async handler(_ctx, args) {
+      const country = APP_SEARCH_COUNTRIES.has(args.country ?? "us") ? (args.country ?? "us") : "us";
+      const key = `${country}:${args.artistId}`;
+      const hit = developerAppsCache.get(key);
+      if (hit && Date.now() - hit.at < APP_DETAIL_TTL_MS) {
+        return { ...hit.data, ok: true };
+      }
+      let result: DeveloperAppsResult = { ok: true, artistName: null, apps: [] };
+      try {
+        const res = await fetch(
+          `https://itunes.apple.com/lookup?id=${args.artistId}&entity=software&country=${country}`,
+          { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12_000) },
+        );
+        if (res.ok) {
+          const data = (await res.json()) as { results?: Record<string, any>[] };
+          const results = Array.isArray(data.results) ? data.results : [];
+          const artist = results.find((r) => r.wrapperType === "artist");
+          const str = (v: unknown) => (typeof v === "string" && v.trim() ? v : null);
+          const num = (v: unknown) => {
+            if (typeof v === "number" && Number.isFinite(v)) return v;
+            if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
+            return null;
+          };
+          const apps = results
+            .filter((r) => r.wrapperType === "software")
+            .map((r) => ({
+              trackId: Number(r.trackId),
+              name: str(r.trackName) ?? "未命名应用",
+              iconUrl: str(r.artworkUrl512) ?? str(r.artworkUrl100),
+              genre: str(r.primaryGenreName),
+              rating: num(r.averageUserRating),
+              ratingCount: num(r.userRatingCount),
+              formattedPrice: str(r.formattedPrice),
+              price: num(r.price),
+              storeUrl: str(r.trackViewUrl),
+            }));
+          result = { ok: true, artistName: artist ? str(artist.artistName) : null, apps };
+        }
+      } catch {
+        result = { ok: false, artistName: null, apps: [] };
+      }
+      developerAppsCache.set(key, { at: Date.now(), data: result });
+      if (developerAppsCache.size > 160) {
+        for (const k of [...developerAppsCache.keys()].slice(0, 40)) developerAppsCache.delete(k);
+      }
+      return result;
     },
   }),
 

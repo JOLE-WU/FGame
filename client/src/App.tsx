@@ -324,7 +324,7 @@ function dealTitle(deal: Deal): string {
 
 function SectionHead({ no, title, en, right }: { no: string; title: string; en: string; right?: ReactNode }) {
   return (
-    <div className="mb-3.5 mt-7 flex items-end justify-between gap-3 first:mt-0">
+    <div className="mb-3.5 mt-7 flex items-center justify-between gap-3 first:mt-0">
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="font-mono text-[10px] font-medium tracking-[0.08em] text-[var(--accent)]">{no} /</span>
         <h2 className="font-serif text-[20px] font-bold leading-none tracking-[0.03em] text-[var(--text)]">{title}</h2>
@@ -1376,7 +1376,6 @@ type TodayProps = {
 };
 
 function TodayPage(p: TodayProps) {
-  const queryClient = useQueryClient();
   const [unclaimedOnly, setUnclaimedOnly] = useState(false);
   const [category, setCategory] = useState<string>("all");
   const [search, setSearch] = useState("");
@@ -1384,8 +1383,6 @@ function TodayPage(p: TodayProps) {
   const deferredSearch = useDeferredValue(search);
   const [sort, setSort] = useState<SortKey>("expiry");
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
 
   // 报头「羊毛日报」支持双击改字：标题只存本机，不跟账号走。
   // 移动端 WKWebView 不保证派发 dblclick，所以另做一次轻量的双 tap 判定。
@@ -1431,22 +1428,6 @@ function TodayPage(p: TodayProps) {
       lastTitleTapRef.current = now;
     }
   };
-
-  const refresh = useMutation({
-    mutationFn: () => api.refreshDeals({}),
-    onSuccess: (r) => {
-      queryClient.invalidateQueries({ queryKey: ["deals"] });
-      queryClient.invalidateQueries({ queryKey: ["appPrices"] });
-      setRefreshMsg(
-        `已同步：GamerPower ${r.gamerpowerCount} 条 · Epic ${r.epicCount} 条 · iOS 本体限免 ${r.iosFreeCount} 条 · 内购限免 ${r.iapFreeCount} 条${r.errors.length ? ` · ${r.errors.join("；")}` : ""}`,
-      );
-    },
-    onError: (e) => setRefreshMsg(`同步失败：${e instanceof Error ? e.message : String(e)}`),
-  });
-  const clearHidden = useMutation({
-    mutationFn: () => api.clearHiddenMarks({ authToken: p.authToken }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deals"] }),
-  });
 
   useEffect(() => {
     setVisibleCount(PAGE_SIZE);
@@ -1542,14 +1523,14 @@ function TodayPage(p: TodayProps) {
     <div>
       {/* masthead */}
       <header>
-        <div className="flex items-center justify-between pb-2.5 pt-3.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.12em] text-[var(--dim2)]">
+        <div className="flex items-center justify-between pb-2 pt-3.5 font-mono text-[10px] font-medium uppercase leading-none tracking-[0.12em] text-[var(--dim2)]">
           <span>
             VOL.{String(dayOfYear).padStart(3, "0")} <span className="text-[var(--accent)]">●</span> 每日限免情报
           </span>
           <span>{dateLine}</span>
         </div>
         <div className="flex items-end justify-between gap-2.5">
-          <div className="flex flex-wrap items-baseline gap-[9px]">
+          <div className="flex flex-col gap-2">
             {editingTitle ? (
               <input
                 ref={titleInputRef}
@@ -1583,74 +1564,11 @@ function TodayPage(p: TodayProps) {
             )}
             <span className="whitespace-nowrap font-mono text-[9px] font-semibold tracking-[0.2em] text-[var(--dim2)]">FREE GAME DAILY</span>
           </div>
-          <div className="relative flex gap-2 pb-[3px]">
-            <ThemeToggleButton theme={p.theme} onToggle={p.onToggleTheme} />
-            <button
-              type="button"
-              aria-label="刷新同步"
-              title="刷新同步"
-              disabled={refresh.isPending}
-              onClick={() => refresh.mutate()}
-              className="grid h-[34px] w-[34px] place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--glass-hi)] backdrop-blur-md disabled:opacity-50"
-            >
-              <svg viewBox="0 0 24 24" className={`h-4 w-4 ${refresh.isPending ? "animate-spin" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.1" /><path d="M20 4v7h-7" /></svg>
-            </button>
-            <button
-              type="button"
-              aria-label="更多操作"
-              aria-expanded={menuOpen}
-              onClick={() => setMenuOpen((v) => !v)}
-              className="grid h-[34px] w-[34px] place-items-center rounded-full border border-[var(--glass-edge)] bg-[var(--surface)] text-[var(--text)] shadow-[var(--glass-hi)] backdrop-blur-md"
-            >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
-            </button>
-            {menuOpen ? (
-              <div className="absolute right-0 top-[42px] z-20 w-44 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--chrome-bg-strong)] py-1.5 shadow-[var(--shadow)] backdrop-blur-xl" role="menu" aria-label="更多操作菜单">
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="block w-full px-4 py-2.5 text-left text-[13px] text-[var(--text)]"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    p.setInnerTab("all");
-                    p.setShowAdd(true);
-                  }}
-                >
-                  ＋ 添加羊毛
-                </button>
-                {hiddenCount > 0 ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    disabled={clearHidden.isPending}
-                    className="block w-full px-4 py-2.5 text-left text-[13px] text-[var(--text)] disabled:opacity-50"
-                    onClick={() => {
-                      clearHidden.mutate();
-                      setMenuOpen(false);
-                    }}
-                  >
-                    恢复全部不感兴趣（{hiddenCount}）
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className="block w-full px-4 py-2.5 text-left text-[13px] text-[var(--text)]"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    p.setInnerTab("claimed");
-                  }}
-                >
-                  查看已领取（{claimedCount}）
-                </button>
-              </div>
-            ) : null}
-          </div>
+          <ThemeToggleButton theme={p.theme} onToggle={p.onToggleTheme} />
         </div>
         <div className="double-rule mt-4" aria-hidden="true" />
         <div className="flex justify-between pt-1.5 font-mono text-[9px] font-medium uppercase leading-none tracking-[0.16em] text-[var(--dim2)]">
           <span>今日战报 / TODAY'S BRIEF</span>
-          <span>{refreshMsg ?? ""}</span>
         </div>
       </header>
 
@@ -1909,11 +1827,13 @@ function DropDetail({
   watched,
   onToggleWatch,
   onClose,
+  onOpenDeveloper,
 }: {
   app: AppPrice;
   watched: boolean;
   onToggleWatch: () => void;
   onClose: () => void;
+  onOpenDeveloper: (artistId: number, name: string) => void;
 }) {
   const swipe = useRankingSwipeBack(onClose);
   useEffect(() => {
@@ -1931,6 +1851,7 @@ function DropDetail({
     staleTime: 30 * 60_000,
   });
   const rec = history.data?.apps.find((a) => a.trackId === app.trackId);
+  const dev = useAppStoreDeveloper(app.trackId, "us");
   const points: PricePoint[] = (rec?.points ?? []).map((p) => ({ date: p.date, cents: p.cents }));
   const rows: [string, string][] = [
     ["当前价格", priceText(app.currentCents, app.currency)],
@@ -1965,8 +1886,8 @@ function DropDetail({
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-3xl px-[22px] pb-28 pt-6">
-        <div className="flex items-center gap-4">
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-10 pt-6">
+        <div className="flex items-start gap-4">
           {app.iconUrl ? (
             <img src={app.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
           ) : (
@@ -1974,7 +1895,7 @@ function DropDetail({
               {(app.name.trim()[0] ?? "A").toUpperCase()}
             </div>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             {app.isDrop ? (
               <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">PRICE DROP · -{app.dropPct}%</div>
             ) : (
@@ -1990,7 +1911,15 @@ function DropDetail({
               ) : null}
             </div>
           </div>
+          <AppStoreGetFollow
+            getLabel={app.currentCents === 0 ? "获取" : priceText(app.currentCents, app.currency)}
+            storeUrl={app.storeUrl}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+          />
         </div>
+
+        <DeveloperLink name={dev?.artistName ?? null} artistId={dev?.artistId ?? null} onOpen={onOpenDeveloper} />
 
         <section className="mt-6" data-drop-chart>
           <div className="flex items-baseline justify-between gap-2">
@@ -2021,35 +1950,6 @@ function DropDetail({
 
         <AppStoreProfile trackId={app.trackId} country="us" />
       </div>
-
-      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-[var(--border)] bg-[var(--chrome-bg-strong)] px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2.5">
-        <div className="mx-auto flex w-full max-w-3xl gap-2">
-          <button
-            type="button"
-            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
-            aria-pressed={watched}
-            onClick={onToggleWatch}
-            className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-[12px] border text-[13px] font-bold transition-colors ${
-              watched
-                ? "border-transparent bg-grad text-[var(--accent-ink)]"
-                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
-            }`}
-          >
-            {watched ? "★ 已关注" : "☆ 加关注"}
-          </button>
-          {app.storeUrl ? (
-            <a
-              href={app.storeUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={`在 App Store 打开 ${app.name}`}
-              className="flex h-11 flex-[1.4] items-center justify-center rounded-[12px] bg-grad text-[13px] font-bold text-[var(--accent-ink)]"
-            >
-              在 App Store 打开 ↗
-            </a>
-          ) : null}
-        </div>
-      </div>
     </div>,
     document.body,
   );
@@ -2066,12 +1966,14 @@ function StoreDetail({
   watched,
   onToggleWatch,
   onClose,
+  onOpenDeveloper,
 }: {
   app: StoreApp;
   country: string;
   watched: boolean;
   onToggleWatch: () => void;
   onClose: () => void;
+  onOpenDeveloper: (artistId: number, name: string) => void;
 }) {
   const swipe = useRankingSwipeBack(onClose);
   useEffect(() => {
@@ -2081,11 +1983,11 @@ function StoreDetail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const dev = useAppStoreDeveloper(app.trackId, country);
 
   const rows: [string, string][] = [
     ["当前价格", app.price === 0 ? "免费" : app.formattedPrice],
     ["类别", app.genre || "—"],
-    ["开发者", app.sellerName || "—"],
   ];
   if (app.rating != null && app.rating > 0) {
     const count = app.ratingCount ? ` · ${app.ratingCount} 个评分` : "";
@@ -2120,8 +2022,8 @@ function StoreDetail({
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-3xl px-[22px] pb-28 pt-6">
-        <div className="flex items-center gap-4">
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-10 pt-6">
+        <div className="flex items-start gap-4">
           {app.iconUrl ? (
             <img
               src={app.iconUrl}
@@ -2133,7 +2035,7 @@ function StoreDetail({
               {(app.name.trim()[0] ?? "A").toUpperCase()}
             </div>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             {app.tag ? (
               <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">
                 {app.tag === "内购限免" ? "IN-APP FREE" : app.tag === "降价" ? "PRICE DROP" : "APP FREE"}
@@ -2142,26 +2044,33 @@ function StoreDetail({
               <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--dim2)]">APP STORE</div>
             )}
             <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
-            <div className="mt-1.5 flex items-baseline gap-2">
-              <b className={`text-[17px] font-bold ${app.price === 0 ? "text-[var(--free-ink)]" : "text-[var(--text)]"}`}>
-                {app.price === 0 ? "免费" : app.formattedPrice}
-              </b>
-              {app.tag ? (
-                <span
-                  className={`flex-none rounded-full px-1.5 py-[2px] text-[9px] font-bold leading-none ${
-                    app.tag === "内购限免"
-                      ? "bg-[var(--iap-bg)] text-[var(--iap-ink)]"
-                      : app.tag === "降价"
-                        ? "bg-[var(--warn-bg)] text-[var(--warn)]"
-                        : "bg-[var(--free-bg)] text-[var(--free-ink)]"
-                  }`}
-                >
-                  {app.tag}
-                </span>
-              ) : null}
-            </div>
+            {app.tag ? (
+              <span
+                className={`mt-2 inline-block rounded-full px-1.5 py-[2px] text-[9px] font-bold leading-none ${
+                  app.tag === "内购限免"
+                    ? "bg-[var(--iap-bg)] text-[var(--iap-ink)]"
+                    : app.tag === "降价"
+                      ? "bg-[var(--warn-bg)] text-[var(--warn)]"
+                      : "bg-[var(--free-bg)] text-[var(--free-ink)]"
+                }`}
+              >
+                {app.tag}
+              </span>
+            ) : null}
           </div>
+          <AppStoreGetFollow
+            getLabel={app.price === 0 ? "获取" : app.formattedPrice}
+            storeUrl={app.storeUrl}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+          />
         </div>
+
+        <DeveloperLink
+          name={dev?.artistName ?? app.sellerName}
+          artistId={dev?.artistId ?? null}
+          onOpen={onOpenDeveloper}
+        />
 
         <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
           {rows.map(([k, v]) => (
@@ -2173,35 +2082,6 @@ function StoreDetail({
         </dl>
 
         <AppStoreProfile trackId={app.trackId} country={country} fallbackImages={app.iconUrl ? [app.iconUrl] : undefined} />
-      </div>
-
-      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-[var(--border)] bg-[var(--chrome-bg-strong)] px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2.5">
-        <div className="mx-auto flex w-full max-w-3xl gap-2">
-          <button
-            type="button"
-            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
-            aria-pressed={watched}
-            onClick={onToggleWatch}
-            className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-[12px] border text-[13px] font-bold transition-colors ${
-              watched
-                ? "border-transparent bg-grad text-[var(--accent-ink)]"
-                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
-            }`}
-          >
-            {watched ? "★ 已关注" : "☆ 加关注"}
-          </button>
-          {app.storeUrl ? (
-            <a
-              href={app.storeUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={`在 App Store 打开 ${app.name}`}
-              className="flex h-11 flex-[1.4] items-center justify-center rounded-[12px] bg-grad text-[13px] font-bold text-[var(--accent-ink)]"
-            >
-              在 App Store 打开 ↗
-            </a>
-          ) : null}
-        </div>
       </div>
     </div>,
     document.body,
@@ -2522,12 +2402,14 @@ function RankingDetail({
   watched,
   onToggleWatch,
   onClose,
+  onOpenDeveloper,
 }: {
   app: RankingApp;
   meta: RankingMeta;
   watched: boolean;
   onToggleWatch: () => void;
   onClose: () => void;
+  onOpenDeveloper: (artistId: number, name: string) => void;
 }) {
   const swipe = useRankingSwipeBack(onClose);
   useEffect(() => {
@@ -2537,6 +2419,7 @@ function RankingDetail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const dev = useAppStoreDeveloper(app.trackId, meta.cc);
 
   const release = app.releaseDate ? String(app.releaseDate).slice(0, 10) : "";
   const rows: [string, string][] = [
@@ -2573,8 +2456,8 @@ function RankingDetail({
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
-        <div className="flex items-center gap-4">
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-10 pt-6">
+        <div className="flex items-start gap-4">
           {app.iconUrl ? (
             <img src={app.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
           ) : (
@@ -2582,12 +2465,23 @@ function RankingDetail({
               {(app.name.trim()[0] ?? "A").toUpperCase()}
             </div>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">NO. {app.rank}</div>
             <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
-            <p className="mt-1 truncate text-[12px] text-[var(--dim)]">{app.sellerName || "App Store"}</p>
           </div>
+          <AppStoreGetFollow
+            getLabel={app.price === "免费" ? "获取" : app.price}
+            storeUrl={app.storeUrl}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+          />
         </div>
+
+        <DeveloperLink
+          name={dev?.artistName ?? app.sellerName}
+          artistId={dev?.artistId ?? null}
+          onOpen={onOpenDeveloper}
+        />
 
         <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
           {rows.map(([k, v]) => (
@@ -2599,37 +2493,6 @@ function RankingDetail({
         </dl>
 
         <AppStoreProfile trackId={app.trackId} country={meta.cc} />
-
-        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
-          数据来自 Apple 官方 App Store 榜单，每 10 分钟更新。榜单条目不是本站收录的限免信息，点下方按钮前往该区商店查看完整介绍与下载。
-        </p>
-
-        <div className="mt-6 flex gap-2.5">
-          <a
-            href={app.storeUrl ?? "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80"
-          >
-            在 App Store 打开 ↗
-          </a>
-          <button
-            type="button"
-            onClick={onToggleWatch}
-            aria-pressed={watched}
-            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
-            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
-              watched
-                ? "border-transparent bg-grad text-[var(--accent-ink)]"
-                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
-            }`}
-          >
-            {watched ? "★ 已关注" : "☆ 加关注"}
-          </button>
-        </div>
-        {watched ? (
-          <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p>
-        ) : null}
       </div>
     </div>,
     document.body,
@@ -2645,11 +2508,13 @@ function ArcadeDetail({
   watched,
   onToggleWatch,
   onClose,
+  onOpenDeveloper,
 }: {
   game: ArcadeGame;
   watched: boolean;
   onToggleWatch: () => void;
   onClose: () => void;
+  onOpenDeveloper: (artistId: number, name: string) => void;
 }) {
   const swipe = useRankingSwipeBack(onClose);
   useEffect(() => {
@@ -2659,11 +2524,11 @@ function ArcadeDetail({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  const dev = useAppStoreDeveloper(game.trackId, "us");
 
   const release = game.releaseDate ? String(game.releaseDate).slice(0, 10) : "";
   const rows: [string, string][] = [
     ["收录类型", game.arcadeKind || "Apple Arcade"],
-    ["开发者", game.sellerName || "—"],
     ["类别", game.genre || "—"],
     ["评分", game.rating != null ? `${game.rating.toFixed(1)} / 5` : "—"],
     ["获取方式", "Apple Arcade 订阅"],
@@ -2696,8 +2561,8 @@ function ArcadeDetail({
         </div>
       </div>
 
-      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-6">
-        <div className="flex items-center gap-4">
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-10 pt-6">
+        <div className="flex items-start gap-4">
           {game.iconUrl ? (
             <img src={game.iconUrl} alt="" className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover" />
           ) : (
@@ -2705,12 +2570,23 @@ function ArcadeDetail({
               {(game.name.trim()[0] ?? "A").toUpperCase()}
             </div>
           )}
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">APPLE ARCADE</div>
             <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{game.name}</h1>
-            <p className="mt-1 truncate text-[12px] text-[var(--dim)]">{game.sellerName || "Apple Arcade"}</p>
           </div>
+          <AppStoreGetFollow
+            getLabel="获取"
+            storeUrl={game.storeUrl}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+          />
         </div>
+
+        <DeveloperLink
+          name={dev?.artistName ?? game.sellerName}
+          artistId={dev?.artistId ?? null}
+          onOpen={onOpenDeveloper}
+        />
 
         <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
           {rows.map(([k, v]) => (
@@ -2722,37 +2598,6 @@ function ArcadeDetail({
         </dl>
 
         <AppStoreProfile trackId={game.trackId} country="us" />
-
-        <p className="mt-4 font-mono text-[10px] leading-[1.7] text-[var(--dim2)]">
-          国区 App Store 未上线 Apple Arcade，本清单按美区整理；需订阅 Apple Arcade 后下载，游戏内无广告与内购。数据来自 Apple 官方检索，每 6 小时更新。点下方按钮前往商店查看完整介绍。
-        </p>
-
-        <div className="mt-6 flex gap-2.5">
-          <a
-            href={game.storeUrl ?? "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="flex h-12 flex-1 items-center justify-center rounded-[14px] bg-grad text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80"
-          >
-            在 App Store 打开 ↗
-          </a>
-          <button
-            type="button"
-            onClick={onToggleWatch}
-            aria-pressed={watched}
-            aria-label={watched ? `取消关注 ${game.name}` : `关注 ${game.name}`}
-            className={`flex h-12 flex-1 items-center justify-center rounded-[14px] border text-[13px] font-bold ${
-              watched
-                ? "border-transparent bg-grad text-[var(--accent-ink)]"
-                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
-            }`}
-          >
-            {watched ? "★ 已关注" : "☆ 加关注"}
-          </button>
-        </div>
-        {watched ? (
-          <p className="mt-3 text-center font-mono text-[10px] text-[var(--dim2)]">已加入「我关注的」，可在 限免情报 → 关注 回看</p>
-        ) : null}
       </div>
     </div>,
     document.body,
@@ -2821,14 +2666,6 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
   };
   return (
     <div className="mt-4 pb-2" data-board="ranking">
-      <SectionHead
-        no="01"
-        title={`${regionLabel} · ${kind === "games" ? genreLabel : "App 总榜"}`}
-        en={`TOP ${chart === "free" ? "FREE" : "PAID"} · ${cc.toUpperCase()}`}
-      />
-      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点条目看详情，详情页内可去商店或加关注
-      </p>
       <FilterRow label="区服">
         {RANK_REGIONS.map((r) => (
           <FilterChip key={r.cc} active={cc === r.cc} onClick={() => setCc(r.cc)}>{r.label}</FilterChip>
@@ -2920,18 +2757,6 @@ function ArcadeBoard({ onOpen }: { onOpen?: (g: ArcadeGame) => void }) {
   }, [games, kind, q]);
   return (
     <div className="mt-4 pb-2" data-board="arcade">
-      <SectionHead no="01" title="Apple Arcade 游戏清单" en={`ARCADE · ${query.data?.total ?? 0} GAMES`} />
-      <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
-        国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购 · 点条目看详情，详情页内可去商店或加关注。
-      </p>
-      <a
-        href="https://apps.apple.com/arcade"
-        target="_blank"
-        rel="noreferrer"
-        className="mt-2 inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 py-1.5 text-[10.5px] font-bold text-[var(--text)]"
-      >
-        打开 App Store Arcade 专区 ↗
-      </a>
       <div className="relative mt-3">
         <input
           aria-label="搜索 Arcade 游戏"
@@ -3296,6 +3121,8 @@ function AppStoreProfile({
         </div>
       ) : null}
 
+      <AppStoreReviews trackId={trackId} country={country ?? "us"} />
+
       {rows.length ? (
         <dl className="mt-4 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
           {rows.map(([k, v]) => (
@@ -3330,6 +3157,314 @@ function AppStoreProfile({
           )
         : null}
     </section>
+  );
+}
+
+/** 复用一个已缓存的 App Store 详情查询，只取开发者信息（artistId / artistName）。
+ *  与 AppStoreProfile 共用 queryKey，命中 30 分钟缓存，不会重复打 Apple。 */
+function useAppStoreDeveloper(trackId: number | null, country: string) {
+  const query = useQuery({
+    queryKey: ["appStoreDetail", trackId, country ?? "us"],
+    queryFn: () => api.appStoreDetail({ trackId: trackId!, country }),
+    enabled: trackId != null,
+    staleTime: 30 * 60_000,
+  });
+  return query.data;
+}
+
+/** 详情页头部右侧的「获取 / 关注」按钮组，仿 App Store 排版：
+ *  上一个是跳转商店的「获取」（显示 免费 / 价格），下一个是 star 切换的「关注」。 */
+function AppStoreGetFollow({
+  getLabel,
+  storeUrl,
+  watched,
+  onToggleWatch,
+}: {
+  getLabel: string;
+  storeUrl: string | null | undefined;
+  watched: boolean;
+  onToggleWatch: () => void;
+}) {
+  return (
+    <div className="flex flex-none flex-col items-stretch gap-2 self-start">
+      {storeUrl ? (
+        <a
+          href={storeUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="在 App Store 获取"
+          className="flex h-9 min-w-[88px] items-center justify-center rounded-full bg-grad px-5 text-[13px] font-bold text-[var(--accent-ink)] active:opacity-80"
+        >
+          {getLabel}
+        </a>
+      ) : (
+        <span className="flex h-9 min-w-[88px] items-center justify-center rounded-full bg-[var(--surface2)] px-5 text-[13px] font-bold text-[var(--dim2)]">
+          {getLabel}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onToggleWatch}
+        aria-pressed={watched}
+        aria-label={watched ? "取消关注" : "关注"}
+        className={`flex h-9 min-w-[88px] items-center justify-center gap-1 rounded-full border px-5 text-[13px] font-bold transition-colors ${
+          watched ? "border-transparent bg-grad text-[var(--accent-ink)]" : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+        }`}
+      >
+        <span className="text-[14px] leading-none">{watched ? "★" : "☆"}</span>
+        关注
+      </button>
+    </div>
+  );
+}
+
+/** 详情页标题下方可点击的开发者入口（仿 App Store：蓝色名称 + 右箭头）。 */
+function DeveloperLink({
+  name,
+  artistId,
+  onOpen,
+}: {
+  name: string | null;
+  artistId: number | null;
+  onOpen: (artistId: number, name: string) => void;
+}) {
+  if (!artistId || !name) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(artistId, name)}
+      className="mt-3 flex w-full items-center justify-between rounded-[14px] border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-left shadow-[var(--glass-hi)] active:opacity-80"
+      aria-label={`查看开发者 ${name} 的全部应用`}
+    >
+      <div className="min-w-0">
+        <div className="truncate text-[15px] font-bold text-[var(--accent)]">{name}</div>
+        <div className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.14em] text-[var(--dim2)]">开发者 · DEVELOPER</div>
+      </div>
+      <span className="ml-2 flex-none text-[20px] leading-none text-[var(--dim2)]">›</span>
+    </button>
+  );
+}
+
+type AppStoreReview = {
+  id: string;
+  author: string | null;
+  title: string | null;
+  content: string | null;
+  rating: number | null;
+  version: string | null;
+  updated: string | null;
+};
+
+function fmtReviewDate(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const t = Date.parse(iso);
+  if (!Number.isNaN(t)) return new Date(t).toISOString().slice(0, 10);
+  return iso;
+}
+
+const reviewStars = (rating: number | null) => {
+  const n = Math.max(0, Math.min(5, Math.round(rating ?? 0)));
+  return "★".repeat(n) + "☆".repeat(5 - n);
+};
+
+function ReviewItem({ review }: { review: AppStoreReview }) {
+  // 点「译」才发翻译请求；服务端是异步翻译（先回 translating:true 再后台生成），
+  // 所以这里按 translating 轮询，译文就绪后自动替换，不需要用户再点一次。
+  const [wanted, setWanted] = useState(false);
+  const [view, setView] = useState<"zh" | "raw">("zh");
+  const content = review.content ?? "";
+  const hasLatin = /[A-Za-z]/.test(content);
+  const query = useQuery({
+    queryKey: ["translateText", content],
+    queryFn: () => api.translateText({ text: content }),
+    enabled: wanted && content.length > 0,
+    staleTime: Infinity,
+    refetchInterval: (q) => {
+      const data = q.state.data as TranslateTextData | undefined;
+      return data?.translating ? 2500 : false;
+    },
+  });
+  const zh = query.data?.zh ?? "";
+  const hasZh = zh.length > 0;
+  const pending = wanted && !hasZh && (query.isPending || query.data?.translating === true);
+  const failed = wanted && !hasZh && !pending && query.isSuccess && query.data?.needed === true;
+  // 服务端判定这段文字本来就不需要翻译（中文占比已经足够）：直接收起按钮。
+  const notNeeded = wanted && !hasZh && !pending && query.isSuccess && query.data?.needed === false;
+  const shown = wanted && hasZh && view === "zh" ? zh : content;
+  return (
+    <div className="rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-3.5 shadow-[var(--glass-hi)]" data-review>
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-[13px] font-bold text-[var(--text)]">{review.author ?? "匿名用户"}</span>
+        <span className="flex-none font-mono text-[10px] text-[var(--accent)]">{reviewStars(review.rating)}</span>
+      </div>
+      <div className="mt-0.5 flex items-center gap-2 font-mono text-[9px] text-[var(--dim2)]">
+        {review.version ? <span>v{review.version}</span> : null}
+        {review.updated ? <span>{fmtReviewDate(review.updated)}</span> : null}
+        {hasZh ? <span className="text-[var(--accent)]">中文翻译</span> : null}
+      </div>
+      {review.title ? <div className="mt-2 text-[13px] font-bold text-[var(--text)]">{review.title}</div> : null}
+      <p className="mt-1 whitespace-pre-line text-[12.5px] leading-[1.7] text-[var(--dim)]">{shown}</p>
+      {hasLatin && !notNeeded ? (
+        <button
+          type="button"
+          data-review-translate
+          onClick={() => {
+            if (pending) return;
+            if (hasZh) setView((v) => (v === "zh" ? "raw" : "zh"));
+            else if (failed) void query.refetch();
+            else setWanted(true);
+          }}
+          className="mt-2 font-mono text-[10px] font-bold text-[var(--accent)]"
+        >
+          {pending ? "翻译中…" : hasZh ? (view === "zh" ? "查看原文" : "看译文") : failed ? "译（暂不可用，点击重试）" : "译"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** 用户评价区：拉取 Apple customer-reviews，逐条可点「译」翻译成中文。 */
+function AppStoreReviews({ trackId, country }: { trackId: number | null; country: string }) {
+  const query = useQuery({
+    queryKey: ["appStoreReviews", trackId, country ?? "us"],
+    queryFn: () => api.appStoreReviews({ trackId: trackId!, country }),
+    enabled: trackId != null,
+    staleTime: 30 * 60_000,
+  });
+  if (trackId == null) return null;
+  const reviews = query.data?.reviews ?? [];
+  return (
+    <section className="mt-6" data-app-reviews>
+      <div className="flex items-baseline justify-between gap-2">
+        <h2 className="font-serif text-[16px] font-bold text-[var(--text)]">用户评价</h2>
+        <span className="font-mono text-[9px] text-[var(--dim2)]">APPLE REVIEWS</span>
+      </div>
+      {query.isPending ? (
+        <p className="mt-2 py-6 text-center text-sm text-[var(--dim)]">正在读取用户评价…</p>
+      ) : query.isError ? (
+        <p className="mt-2 font-mono text-[9px] text-[var(--warn)]">评价接口暂无响应。</p>
+      ) : reviews.length === 0 ? (
+        <p className="mt-2 text-[12px] text-[var(--dim)]">该应用在 App Store 暂无用户评价。</p>
+      ) : (
+        <div className="mt-3 flex flex-col gap-2.5">
+          {reviews.map((r) => (
+            <ReviewItem key={r.id} review={r} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+type DeveloperApp = {
+  trackId: number;
+  name: string;
+  iconUrl: string | null;
+  genre: string | null;
+  rating: number | null;
+  ratingCount: number | null;
+  formattedPrice: string | null;
+  price: number | null;
+  storeUrl: string | null;
+};
+
+/** 应用内「开发者」页：列出该开发者在 App Store 的全部应用，点条目进详情。 */
+function DeveloperView({
+  artistId,
+  name,
+  country,
+  onClose,
+  onOpenApp,
+}: {
+  artistId: number;
+  name: string | null;
+  country: string;
+  onClose: () => void;
+  onOpenApp: (app: DeveloperApp) => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const query = useQuery({
+    queryKey: ["developerApps", artistId, country ?? "us"],
+    queryFn: () => api.developerApps({ artistId, country }),
+    staleTime: 30 * 60_000,
+  });
+  const apps = query.data?.apps ?? [];
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`开发者：${name ?? ""}`}
+      data-developer-view
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <div className="min-w-0">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">DEVELOPER</div>
+            <div className="truncate text-[15px] font-bold text-[var(--text)]">{name ?? "开发者"}</div>
+          </div>
+        </div>
+      </div>
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-24 pt-5">
+        {query.isPending ? (
+          <p className="py-10 text-center text-sm text-[var(--dim)]">正在读取开发者应用…</p>
+        ) : query.isError || query.data?.ok === false ? (
+          <p className="py-10 text-center font-mono text-[10px] text-[var(--warn)]">开发者应用接口暂无响应。</p>
+        ) : apps.length === 0 ? (
+          <p className="py-10 text-center text-[13px] text-[var(--dim)]">该开发者在 App Store 暂无其它应用。</p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {apps.map((a) => {
+              const rating = a.rating != null && a.rating > 0 ? `★ ${a.rating.toFixed(1)}` : null;
+              return (
+                <button
+                  key={a.trackId}
+                  type="button"
+                  onClick={() => onOpenApp(a)}
+                  className="flex w-full items-center gap-3 rounded-[14px] border border-[var(--glass-edge)] bg-[var(--surface)] p-2.5 text-left shadow-[var(--glass-hi)] backdrop-blur-md active:opacity-70"
+                >
+                  {a.iconUrl ? (
+                    <img src={a.iconUrl} alt="" loading="lazy" className="h-12 w-12 flex-none rounded-[12px] bg-[var(--surface2)] object-cover" />
+                  ) : (
+                    <div className="h-12 w-12 flex-none rounded-[12px] bg-[var(--surface2)]" />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[13px] font-bold text-[var(--text)]">{a.name}</div>
+                    <div className="mt-0.5 truncate text-[10px] text-[var(--dim)]">
+                      {[a.genre, rating].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <div className="flex-none text-right">
+                    <div className="text-[11px] font-bold text-[var(--accent)]">{a.price === 0 ? "免费" : a.formattedPrice ?? ""}</div>
+                    <div className="font-mono text-[9px] text-[var(--dim2)]">详情 →</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -3454,6 +3589,8 @@ function AppsPage({
   // 降价条目也先落在应用内详情页（价格曲线 + 官方资料），再由用户决定去商店。
   const [detailDrop, setDetailDrop] = useState<AppPrice | null>(null);
   const [detailStore, setDetailStore] = useState<StoreApp | null>(null);
+  // 详情页点开发者名进「开发者」页：列出该开发者全部 App。
+  const [developerView, setDeveloperView] = useState<{ artistId: number; name: string | null; country: string } | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -3654,8 +3791,39 @@ function AppsPage({
     </div>
   );
 
+  const openDeveloperApp = (a: DeveloperApp) => {
+    setDetailStore({
+      trackId: a.trackId,
+      name: a.name,
+      iconUrl: a.iconUrl,
+      storeUrl: a.storeUrl,
+      sellerName: developerView?.name ?? null,
+      genre: a.genre,
+      price: a.price ?? 0,
+      formattedPrice: a.formattedPrice ?? (a.price === 0 ? "免费" : ""),
+      currency: "USD",
+      rating: a.rating,
+      ratingCount: a.ratingCount,
+      collected: false,
+      tag: null,
+      dealId: null,
+    });
+  };
+
   return (
     <div>
+      {developerView ? (
+        <DeveloperView
+          artistId={developerView.artistId}
+          name={developerView.name}
+          country={developerView.country}
+          onClose={() => setDeveloperView(null)}
+          onOpenApp={(a) => {
+            setDeveloperView(null);
+            openDeveloperApp(a);
+          }}
+        />
+      ) : null}
       {detailRank ? (
         <RankingDetail
           app={detailRank.app}
@@ -3663,6 +3831,7 @@ function AppsPage({
           watched={storeWatchIds.has(detailRank.app.trackId)}
           onToggleWatch={() => toggleStoreWatch(rankingToStoreApp(detailRank.app))}
           onClose={() => setDetailRank(null)}
+          onOpenDeveloper={(id, n) => setDeveloperView({ artistId: id, name: n, country: detailRank.meta.cc })}
         />
       ) : null}
       {detailDrop ? (
@@ -3671,6 +3840,7 @@ function AppsPage({
           watched={watchTracks.includes(detailDrop.trackId)}
           onToggleWatch={() => toggleTrack(detailDrop.trackId)}
           onClose={() => setDetailDrop(null)}
+          onOpenDeveloper={(id, n) => setDeveloperView({ artistId: id, name: n, country: "us" })}
         />
       ) : null}
       {detailStore ? (
@@ -3680,6 +3850,7 @@ function AppsPage({
           watched={storeWatchIds.has(detailStore.trackId)}
           onToggleWatch={() => toggleStoreWatch(detailStore)}
           onClose={() => setDetailStore(null)}
+          onOpenDeveloper={(id, n) => setDeveloperView({ artistId: id, name: n, country: storeCountry })}
         />
       ) : null}
       {detailArcade ? (
@@ -3688,9 +3859,10 @@ function AppsPage({
           watched={storeWatchIds.has(detailArcade.trackId)}
           onToggleWatch={() => toggleStoreWatch(arcadeToStoreApp(detailArcade))}
           onClose={() => setDetailArcade(null)}
+          onOpenDeveloper={(id, n) => setDeveloperView({ artistId: id, name: n, country: "us" })}
         />
       ) : null}
-      <div className="flex min-h-[32px] items-center gap-2 pb-1 pt-4">
+      <div className="flex items-end gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
         {/* 搜索框缩成标题行右侧的小胶囊：它只筛「限免情报」里的条目与
@@ -3715,7 +3887,7 @@ function AppsPage({
               }}
               enterKeyHint="search"
               placeholder="搜索应用 / 全库"
-              className="w-full rounded-full border border-[var(--border)] bg-[var(--surface2)] py-[7px] pl-3 pr-8 text-[11.5px] leading-none text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
+              className="h-[26px] w-full rounded-full border border-[var(--border)] bg-[var(--surface2)] pl-3 pr-8 text-[11.5px] leading-none text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
             />
             {search ? (
               <SearchClearButton
@@ -4101,19 +4273,9 @@ function GamesPage({
   };
   return (
     <div>
-      <div className="flex items-baseline gap-2 pb-1 pt-4">
+      <div className="flex items-end gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">游戏</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">GAME GIVEAWAYS</span>
-        {!selecting ? (
-          <button
-            type="button"
-            aria-label="批量入库：进入多选模式"
-            onClick={() => setSelecting(true)}
-            className="ml-auto flex-none self-center rounded-full border border-[var(--glass-edge)] bg-[var(--surface)] px-3 py-1.5 text-xs font-bold text-[var(--text)] shadow-[var(--glass-hi)] backdrop-blur-md"
-          >
-            批量入库
-          </button>
-        ) : null}
       </div>
       {selecting ? (
         <p className="pb-1 text-xs leading-relaxed text-[var(--dim)]">多选模式：点游戏切换选中，已入库的不可选；选好后点下方「一键入库」，逐款在官方页领取。</p>
@@ -4357,7 +4519,7 @@ function CloudPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Dea
   );
   return (
     <div>
-      <div className="flex items-baseline gap-2 pb-1 pt-4">
+      <div className="flex items-end gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">云服务</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">CLOUD &amp; AI</span>
       </div>
@@ -6013,7 +6175,7 @@ function MinePage({
 
   return (
     <div>
-      <div className="flex items-baseline gap-2 pb-1 pt-4">
+      <div className="flex items-end gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">我的</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">ACCOUNT &amp; LIBRARY</span>
       </div>
@@ -6249,24 +6411,28 @@ function MinePage({
       ) : null}
 
       {/* platform bindings — compact small cards, one row of three */}
-      <SectionHead no="02" title="平台账号" en="GAME ACCOUNTS" />
-      <div className="mb-2 flex items-center gap-2">
-        <button
-          type="button"
-          aria-label="同步所有已绑定平台的游戏库"
-          disabled={syncAll.isPending}
-          onClick={() => { setSyncAllNote(null); syncAll.mutate(); }}
-          className="flex-none rounded-[14px] border border-[var(--glass-edge-strong)] bg-[var(--surface2)] px-3 py-1.5 text-xs font-bold text-[var(--text)] backdrop-blur-md disabled:opacity-50"
-        >
-          {syncAll.isPending ? "同步中…" : "同步所有平台"}
-        </button>
-        {syncAllNote ? (
-          <>
-            <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--dim)]" title={syncAllNote}>{syncAllNote}</span>
-            <button type="button" aria-label="关闭同步结果" onClick={() => setSyncAllNote(null)} className="flex-none px-1 text-[13px] leading-none text-[var(--dim2)]">×</button>
-          </>
-        ) : null}
-      </div>
+      <SectionHead
+        no="02"
+        title="平台账号"
+        en="GAME ACCOUNTS"
+        right={
+          <button
+            type="button"
+            aria-label="同步所有已绑定平台的游戏库"
+            disabled={syncAll.isPending}
+            onClick={() => { setSyncAllNote(null); syncAll.mutate(); }}
+            className="flex-none self-center rounded-[14px] border border-[var(--glass-edge-strong)] bg-[var(--surface2)] px-3 py-1.5 text-xs font-bold text-[var(--text)] backdrop-blur-md disabled:opacity-50"
+          >
+            {syncAll.isPending ? "同步中…" : "同步所有平台"}
+          </button>
+        }
+      />
+      {syncAllNote ? (
+        <div className="mb-2 flex items-center gap-2">
+          <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--dim)]" title={syncAllNote}>{syncAllNote}</span>
+          <button type="button" aria-label="关闭同步结果" onClick={() => setSyncAllNote(null)} className="flex-none px-1 text-[13px] leading-none text-[var(--dim2)]">×</button>
+        </div>
+      ) : null}
       <div className="grid grid-cols-3 gap-2">
         {(data?.platforms ?? []).map((status) => {
           const group = groups.find((g) => g.platform === status.platform);
