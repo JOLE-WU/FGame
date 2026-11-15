@@ -2507,22 +2507,168 @@ function displayPrice(formatted: string | null, currency: string): string {
   return formatted;
 }
 
+type RegionPriceRow = ApiResponse<typeof api, "appStoreRegionPrices">["prices"][number];
+
+/** 跨区标题会本地化（日区片假名、土区副标题都换过），比较时只保留主体。 */
+function sameTitle(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (v: string) =>
+    v
+      .toLowerCase()
+      .replace(/[:：|｜·・\-–—_,，.。!！?？'"“”‘’()（）[\]【】/]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  if (!a || !b) return true;
+  return norm(a) === norm(b);
+}
+
 /**
- * 详情页「各区价格对比」：同一个 trackId 在 14 个 storefront 的实际售价，
- * 统一折算成人民币后从低到高排，回答「这个价在别的区买要多少」。
+ * 从「各区价格对比」点进来的某个区详情：这个 storefront 自己的一套资料
+ * （本区名称、本区价格、本区截图与评价），全部按该区 country 取。
+ */
+function RegionAppSheet({
+  row,
+  baseName,
+  watched,
+  onToggleWatch,
+  onClose,
+  onOpenDeveloper,
+}: {
+  row: RegionPriceRow;
+  baseName: string;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+  onOpenDeveloper: (artistId: number, name: string) => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  const dev = useAppStoreDeveloper(row.trackId, row.cc);
+  const label = PRICE_REGION_LABEL[row.cc] ?? row.cc.toUpperCase();
+  const name = row.name ?? baseName;
+  const isLocalRelease = row.match === "alias";
+  const price = row.price === 0 ? "免费" : displayPrice(row.formattedPrice, row.currency);
+  useEffect(() => {
+    // 捕获阶段截住 Esc，否则会连带把下面的榜单详情一起关掉。
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${label}区详情：${name}`}
+      data-region-app={row.cc}
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回各区价格对比"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">
+            {row.cc.toUpperCase()} · APP STORE
+          </span>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-10 pt-6">
+        <div className="flex items-start gap-4">
+          {row.iconUrl ? (
+            <img
+              src={row.iconUrl}
+              alt=""
+              className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover"
+            />
+          ) : (
+            <div className="grid h-[92px] w-[92px] flex-none place-items-center rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">
+              {label} · {row.cc.toUpperCase()}
+              {isLocalRelease ? " · 本地发行版" : ""}
+            </div>
+            <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{name}</h1>
+            {!sameTitle(name, baseName) ? (
+              <p className="mt-1 text-[11px] leading-snug text-[var(--dim2)]">你所在区的名称：{baseName}</p>
+            ) : null}
+          </div>
+          <AppStoreGetFollow
+            getLabel={row.price === 0 ? "获取" : price}
+            storeUrl={row.storeUrl}
+            watched={watched}
+            onToggleWatch={onToggleWatch}
+            showFollow={watched !== false && row.match === "same"}
+          />
+        </div>
+
+        <DeveloperLink name={dev?.artistName ?? row.artistName} artistId={dev?.artistId ?? null} onOpen={onOpenDeveloper} />
+
+        <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]" data-region-app-facts>
+          <div className="flex justify-between gap-4">
+            <dt className="shrink-0 text-[var(--dim)]">本区价格</dt>
+            <dd className="text-right font-medium text-[var(--text)]">{price}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="shrink-0 text-[var(--dim)]">区服</dt>
+            <dd className="text-right font-medium text-[var(--text)]">{label} · {row.cc.toUpperCase()}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="shrink-0 text-[var(--dim)]">上架版本</dt>
+            <dd className="text-right font-medium text-[var(--text)]">
+              {isLocalRelease ? "本区单独上架" : "与其它区同一个 App"}
+            </dd>
+          </div>
+          {row.bundleId ? (
+            <div className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">Bundle ID</dt>
+              <dd className="min-w-0 truncate text-right font-mono text-[11px] text-[var(--dim)]">{row.bundleId}</dd>
+            </div>
+          ) : null}
+        </dl>
+
+        <AppStoreProfile trackId={row.trackId} country={row.cc} />
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * 详情页「各区价格对比」：同一个 App 在 14 个 storefront 的实际售价。
+ * Apple 给每个 App 一个全局 trackId，但标题会按区本地化，所以行里带上该区自己的名字，
+ * 名称对不上时用 bundleId / 标题匹配补位，并标出「本地发行版」。
  */
 function RegionPriceCompare({
   trackId,
   currentCc,
+  currentName,
   rates,
+  onOpenRegion,
 }: {
   trackId: number;
   currentCc: string;
+  currentName: string;
   rates: Record<string, number> | null;
+  onOpenRegion: (row: RegionPriceRow) => void;
 }) {
   const query = useQuery({
-    queryKey: ["regionPrices", trackId],
-    queryFn: () => api.appStoreRegionPrices({ trackId }),
+    queryKey: ["regionPrices", trackId, currentCc, currentName],
+    queryFn: () => api.appStoreRegionPrices({ trackId, cc: currentCc, name: currentName }),
     staleTime: 6 * 60 * 60_000,
   });
   const rows = (query.data?.prices ?? [])
@@ -2539,10 +2685,14 @@ function RegionPriceCompare({
   // 大部分 App 只在一部分区上架（国区独占很常见），未上架的别占一整行。
   const withPrice = rows.filter((r) => r.cny != null);
   const missing = rows.filter((r) => r.cny == null);
-  const cheapest = withPrice.find((r) => r.cny != null && r.cny > 0) ?? null;
+  // 只有同一个 App（match=same）之间比价才成立；本地发行版口径不同，单独标出来。
+  const comparable = withPrice.filter((r) => r.match === "same");
+  const pool = comparable.length ? comparable : withPrice;
+  const cheapest = pool.find((r) => r.cny != null && r.cny > 0) ?? null;
   const current = rows.find((r) => r.cc === currentCc) ?? null;
-  const saving =
-    cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
+  const saving = cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
+  const aliases = rows.filter((r) => r.match === "alias");
+  const renamed = withPrice.filter((r) => !sameTitle(r.name, currentName)).length;
 
   return (
     <section className="mt-6" data-region-prices>
@@ -2574,37 +2724,52 @@ function RegionPriceCompare({
           <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
             {withPrice.map((r, i) => {
               const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;
+              const renamedHere = !sameTitle(r.name, currentName);
               return (
-                <a
+                <button
                   key={r.cc}
-                  href={r.storeUrl ?? "#"}
-                  target="_blank"
-                  rel="noreferrer"
+                  type="button"
+                  onClick={() => onOpenRegion(r)}
                   data-region-row={r.cc}
-                  aria-label={`${PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()} 价格 ${r.cny == null ? "未上架" : displayPrice(r.formattedPrice, r.currency)}`}
-                  className={`flex items-center gap-2 px-3 py-[9px] ${i ? "border-t border-[var(--border)]" : ""} ${
+                  data-region-match={r.match}
+                  aria-label={`${PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()} 价格 ${displayPrice(r.formattedPrice, r.currency)}，查看该区详情`}
+                  className={`flex w-full items-center gap-2 px-3 py-[9px] text-left ${i ? "border-t border-[var(--border)]" : ""} ${
                     r.cc === currentCc ? "bg-[var(--surface2)]" : ""
-                  } ${r.cny == null ? "opacity-45" : "active:opacity-70"}`}
+                  } active:opacity-70`}
                 >
-                  <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text)]">
-                    <span className="mr-2 font-mono text-[9px] font-bold tracking-[0.08em] text-[var(--dim2)]">
-                      {r.cc.toUpperCase()}
+                  <span className="w-[22px] flex-none font-mono text-[9px] font-bold tracking-[0.04em] text-[var(--dim2)]">
+                    {r.cc.toUpperCase()}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] text-[var(--text)]">
+                      {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
+                      {r.cc === currentCc ? <span className="font-mono text-[9px] text-[var(--dim2)]">{" · 当前"}</span> : null}
                     </span>
-                    {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
+                    {renamedHere ? (
+                      <span className="mt-[2px] block truncate text-[10px] leading-snug text-[var(--dim2)]" data-region-name>
+                        {r.name}
+                      </span>
+                    ) : null}
                   </span>
-                  {isLow ? (
-                    <span className="flex-none rounded-full bg-[var(--accent)] px-1.5 py-[1px] text-[9px] font-bold text-[var(--accent-ink)]">最低</span>
-                  ) : null}
-                  {r.cc === currentCc ? (
-                    <span className="flex-none rounded-full border border-[var(--border)] px-1.5 py-[1px] text-[9px] font-bold text-[var(--dim)]">当前</span>
-                  ) : null}
-                  <span className="w-[80px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
-                    {r.cny == null ? "未上架" : displayPrice(r.formattedPrice, r.currency)}
+                  <span className="w-[76px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
+                    {displayPrice(r.formattedPrice, r.currency)}
                   </span>
-                  <span className="w-[58px] flex-none text-right font-mono text-[12px] font-bold text-[var(--accent)]">
-                    {r.cny == null ? "—" : r.cny === 0 ? "免费" : `¥${cnyAmount(r.cny)}`}
+                  <span className="w-[58px] flex-none text-right">
+                    <span className="block font-mono text-[12px] font-bold leading-tight text-[var(--accent)]">
+                      {r.cny === 0 ? "免费" : `¥${cnyAmount(r.cny as number)}`}
+                    </span>
+                    {isLow || r.match === "alias" ? (
+                      <span
+                        className={`mt-[2px] block text-[9px] font-bold leading-none ${
+                          isLow ? "text-[var(--accent)]" : "text-[var(--dim2)]"
+                        }`}
+                      >
+                        {isLow ? "最低价" : "本地版"}
+                      </span>
+                    ) : null}
                   </span>
-                </a>
+                  <span aria-hidden className="flex-none font-mono text-[11px] text-[var(--dim2)]">›</span>
+                </button>
               );
             })}
             {missing.length ? (
@@ -2613,6 +2778,13 @@ function RegionPriceCompare({
               </p>
             ) : null}
           </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-[var(--dim2)]">
+            {renamed
+              ? `各区标题会本地化，这 ${renamed} 个区的写法与当前区不同（行内第二行是本区名称）；同款按 Apple 的 trackId / bundleId 认定。`
+              : "各区标题一致，均按同一 trackId 认定。"}
+            {aliases.length ? `「本地版」是当地单独上架的版本（不同 bundleId），价格口径可能不同，不参与最低价比较。` : ""}
+            点任意一行可看该区详情页。
+          </p>
         </>
       )}
     </section>
@@ -2647,6 +2819,7 @@ function RankingDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const dev = useAppStoreDeveloper(app.trackId, meta.cc);
+  const [regionRow, setRegionRow] = useState<RegionPriceRow | null>(null);
   const isPaid = meta.chartLabel === "付费榜";
   const showCny = needsCnyPrice(meta.cc, isPaid ? "paid" : "free");
   // 付费榜详情要用汇率做「各区价格对比」，国区也不例外。
@@ -2724,10 +2897,29 @@ function RankingDetail({
           ))}
         </dl>
 
-        {isPaid ? <RegionPriceCompare trackId={app.trackId} currentCc={meta.cc} rates={rates} /> : null}
+        {isPaid ? (
+          <RegionPriceCompare
+            trackId={app.trackId}
+            currentCc={meta.cc}
+            currentName={app.name}
+            rates={rates}
+            onOpenRegion={setRegionRow}
+          />
+        ) : null}
 
         <AppStoreProfile trackId={app.trackId} country={meta.cc} />
       </div>
+
+      {regionRow ? (
+        <RegionAppSheet
+          row={regionRow}
+          baseName={app.name}
+          watched={watched}
+          onToggleWatch={onToggleWatch}
+          onClose={() => setRegionRow(null)}
+          onOpenDeveloper={onOpenDeveloper}
+        />
+      ) : null}
     </div>,
     document.body,
   );
@@ -3430,11 +3622,13 @@ function AppStoreGetFollow({
   storeUrl,
   watched,
   onToggleWatch,
+  showFollow = true,
 }: {
   getLabel: string;
   storeUrl: string | null | undefined;
   watched: boolean;
   onToggleWatch: () => void;
+  showFollow?: boolean;
 }) {
   return (
     <div className="flex flex-none flex-col items-stretch gap-2 self-start">
@@ -3453,6 +3647,7 @@ function AppStoreGetFollow({
           {getLabel}
         </span>
       )}
+      {showFollow ? (
       <button
         type="button"
         onClick={onToggleWatch}
@@ -3465,6 +3660,7 @@ function AppStoreGetFollow({
         <span className="text-[14px] leading-none">{watched ? "★" : "☆"}</span>
         关注
       </button>
+      ) : null}
     </div>
   );
 }

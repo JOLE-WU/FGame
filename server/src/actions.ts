@@ -4814,13 +4814,40 @@ const APP_RANKING_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb",
 // 详情页「各区价格对比」覆盖的 storefront：核心大区 + 低价区（土/尼/埃）。
 const PRICE_COMPARE_COUNTRIES = ["cn", "hk", "tw", "jp", "kr", "sg", "us", "gb", "ca", "au", "in", "tr", "ng", "eg"];
 const PRICE_COMPARE_TTL_MS = 6 * 60 * 60_000;
+type RegionPriceMatch = "same" | "alias" | "none";
 type RegionPriceOut = {
   cc: string;
   currency: string;
   price: number | null;
   formattedPrice: string | null;
   storeUrl: string | null;
+  trackId: number | null;
+  name: string | null;
+  bundleId: string | null;
+  artistName: string | null;
+  iconUrl: string | null;
+  /** same = 同一个 trackId / bundleId；alias = 名称对上的同期版本；none = 该区没找到。 */
+  match: RegionPriceMatch;
 };
+
+/** 名称归一化：去掉副标题标点与大小写差异，只留下可比较的主体。 */
+function normAppName(raw: string): string {
+  return raw
+    .toLowerCase()
+    .replace(/[:：|｜·・\-–—_,，.。!！?？'"“”‘’()（）[\]【】/]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** 各区标题常见写法是「主名：本地化副标题」，主名往往才是跨区相同的部分。 */
+function appNameTerms(raw: string): string[] {
+  const name = raw.trim();
+  if (!name) return [];
+  const base = (name.split(/[:：|｜]/)[0] ?? "").trim();
+  const terms = [name];
+  if (base.length >= 2 && normAppName(base) !== normAppName(name)) terms.push(base);
+  return [...new Set(terms)];
+}
 const priceCompareCache = new Map<string, { at: number; prices: RegionPriceOut[] }>();
 const APP_RANKING_TTL_MS = 10 * 60_000;
 const GAME_GENRE_IDS = new Set([
@@ -6285,9 +6312,13 @@ export const Actions = {
 
   appStoreRegionPrices: defineAction({
     description:
-      "Compares one app's price across 14 storefronts (CN/HK/TW/JP/KR/SG/US/GB/CA/AU/IN/TR/NG/EG) via Apple's iTunes lookup, returning local price, currency and store link per country so the client can rank them after RMB conversion. Cached 6 hours per trackId.",
+      "Compares one app's price across 14 storefronts (CN/HK/TW/JP/KR/SG/US/GB/CA/AU/IN/TR/NG/EG). Apple keeps one global trackId but localises the title, so every row also returns that storefront's own name/bundleId/icon; storefronts where the id lookup comes back empty are retried through the iTunes Search API and matched by bundleId (same SKU) or normalised title (local release). Cached 6 hours per trackId.",
     request: z.object({
       trackId: z.number().int().positive(),
+      /** 当前区，用来确定「基准名称」；缺省时取第一个命中的区。 */
+      cc: z.string().trim().min(2).max(2).optional(),
+      /** 当前区显示名，提高名称搜索的命中率。 */
+      name: z.string().trim().max(160).optional(),
       countries: z.array(z.string().trim().min(2).max(2)).max(24).optional(),
     }),
     response: z.object({
@@ -6300,44 +6331,141 @@ export const Actions = {
           price: z.number().nullable(),
           formattedPrice: z.string().nullable(),
           storeUrl: z.string().nullable(),
+          trackId: z.number().nullable(),
+          name: z.string().nullable(),
+          bundleId: z.string().nullable(),
+          artistName: z.string().nullable(),
+          iconUrl: z.string().nullable(),
+          match: z.enum(["same", "alias", "none"]),
         }),
       ),
     }),
     async handler(_ctx, args) {
       const wanted = (args.countries?.length ? args.countries : PRICE_COMPARE_COUNTRIES).map((c) => c.toLowerCase());
       const list = [...new Set(wanted)].filter((c) => /^[a-z]{2}$/.test(c)).slice(0, 24);
-      const key = `${args.trackId}:${list.join(",")}`;
+      const key = `${args.trackId}:${list.join(",")}:${(args.cc ?? "").toLowerCase()}`;
       const cached = priceCompareCache.get(key);
       if (cached && Date.now() - cached.at < PRICE_COMPARE_TTL_MS) {
         return { trackId: args.trackId, at: cached.at, prices: cached.prices };
       }
-      const fetchOne = async (cc: string): Promise<RegionPriceOut> => {
+
+      const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+      const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+      const blank = (cc: string): RegionPriceOut => ({
+        cc,
+        currency: "",
+        price: null,
+        formattedPrice: null,
+        storeUrl: null,
+        trackId: null,
+        name: null,
+        bundleId: null,
+        artistName: null,
+        iconUrl: null,
+        match: "none",
+      });
+      const fromRow = (cc: string, row: Record<string, unknown>, match: RegionPriceMatch): RegionPriceOut => ({
+        cc,
+        currency: text(row.currency) ?? "",
+        price: num(row.price),
+        formattedPrice: text(row.formattedPrice),
+        storeUrl: text(row.trackViewUrl),
+        trackId: num(row.trackId),
+        name: text(row.trackName),
+        bundleId: text(row.bundleId),
+        artistName: text(row.artistName),
+        iconUrl: text(row.artworkUrl100) ?? text(row.artworkUrl60),
+        match,
+      });
+
+      const lookupOne = async (cc: string): Promise<RegionPriceOut> => {
         try {
           const res = await fetch(`https://itunes.apple.com/lookup?id=${args.trackId}&country=${cc}`, {
             headers: { "User-Agent": "Mozilla/5.0" },
             signal: AbortSignal.timeout(10_000),
           });
-          if (!res.ok) return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
+          if (!res.ok) return blank(cc);
           const body = (await res.json()) as { results?: Record<string, unknown>[] };
           const row = Array.isArray(body.results) ? body.results[0] : undefined;
-          if (!row) return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
-          const price = typeof row.price === "number" && Number.isFinite(row.price) ? row.price : null;
-          return {
-            cc,
-            currency: String(row.currency ?? ""),
-            price,
-            formattedPrice: String(row.formattedPrice ?? "") || null,
-            storeUrl: String(row.trackViewUrl ?? "") || null,
-          };
+          return row ? fromRow(cc, row, "same") : blank(cc);
         } catch {
-          return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
+          return blank(cc);
         }
       };
+
       // Apple lookups are cheap but rate-limited; walk them 5 at a time.
       const prices: RegionPriceOut[] = [];
       for (let i = 0; i < list.length; i += 5) {
-        prices.push(...(await Promise.all(list.slice(i, i + 5).map(fetchOne))));
+        prices.push(...(await Promise.all(list.slice(i, i + 5).map(lookupOne))));
       }
+
+      // 基准：优先用当前区，其次第一个命中的区。
+      const baseCc = (args.cc ?? "").toLowerCase();
+      const refRow =
+        prices.find((r) => r.cc === baseCc && r.name) ?? prices.find((r) => r.name) ?? null;
+      const refName = args.name?.trim() || refRow?.name || "";
+      const refBundle = refRow?.bundleId ?? null;
+      const terms = appNameTerms(refName);
+
+      /**
+       * 未命中的区再搜一次：同 bundleId 说明就是同一 SKU（lookup 偶发漏返回），
+       * 标题归一化相同或互含则认为是本区的本地化上架版本（例如日区片假名标题）。
+       */
+      const searchOne = async (cc: string): Promise<RegionPriceOut | null> => {
+        let best: RegionPriceOut | null = null;
+        let bestScore = 0;
+        for (const term of terms.slice(0, 2)) {
+          try {
+            const res = await fetch(
+              `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=${cc}&entity=software&limit=10`,
+              { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(12_000) },
+            );
+            if (!res.ok) continue;
+            const body = (await res.json()) as { results?: Record<string, unknown>[] };
+            const rows = Array.isArray(body.results) ? body.results : [];
+            for (const row of rows) {
+              const name = text(row.trackName);
+              if (!name) continue;
+              const bundle = text(row.bundleId);
+              const nName = normAppName(name);
+              const nRef = normAppName(refName);
+              let score = 0;
+              let match: RegionPriceMatch = "none";
+              if (refBundle && bundle === refBundle) {
+                score = 100;
+                match = "same";
+              } else if (nRef.length >= 2 && nName === nRef) {
+                // 标题完全一致才认：包含关系会把「攻略秘籍 For 泰拉瑞亚」这类第三方 App 也拉进来。
+                score = 70;
+                match = "alias";
+              }
+              if (score > bestScore) {
+                bestScore = score;
+                best = fromRow(cc, row, match);
+              }
+            }
+          } catch {
+            /* 单个区搜索失败当作没找到，不影响其它区 */
+          }
+          if (bestScore >= 100) break;
+        }
+        return bestScore >= 40 ? best : null;
+      };
+
+      if (terms.length) {
+        // 只补前几个缺口：每个区两次 search，全量补会把 Apple 的限流额度吃满。
+        const gaps = prices.filter((r) => r.match === "none").slice(0, 4);
+        for (let i = 0; i < gaps.length; i += 4) {
+          const found = await Promise.all(gaps.slice(i, i + 4).map((r) => searchOne(r.cc)));
+          found.forEach((row, idx) => {
+            const gap = gaps[i + idx];
+            if (!row || !gap) return;
+            const at = prices.findIndex((p) => p.cc === gap.cc);
+            if (at >= 0) prices[at] = row;
+          });
+        }
+      }
+
       const at = Date.now();
       priceCompareCache.set(key, { at, prices });
       if (priceCompareCache.size > 300) {
