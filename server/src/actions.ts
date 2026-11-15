@@ -4810,7 +4810,18 @@ type DeveloperAppsResult = {
 /* ------------------------------------------------------------------ */
 // Marketing Tools RSS v2 的 ?genre= 实测不生效（带 6014 仍返回总榜），只有
 // v1 iTunes RSS 支持任意 genre（含全部游戏子分类），所以榜单统一走 v1。
-const APP_RANKING_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", "kr", "sg", "au"]);
+const APP_RANKING_COUNTRIES = new Set(["cn", "us", "jp", "hk", "in", "tw", "gb", "kr", "sg", "au", "tr", "ng", "eg"]);
+// 详情页「各区价格对比」覆盖的 storefront：核心大区 + 低价区（土/尼/埃）。
+const PRICE_COMPARE_COUNTRIES = ["cn", "hk", "tw", "jp", "kr", "sg", "us", "gb", "ca", "au", "in", "tr", "ng", "eg"];
+const PRICE_COMPARE_TTL_MS = 6 * 60 * 60_000;
+type RegionPriceOut = {
+  cc: string;
+  currency: string;
+  price: number | null;
+  formattedPrice: string | null;
+  storeUrl: string | null;
+};
+const priceCompareCache = new Map<string, { at: number; prices: RegionPriceOut[] }>();
 const APP_RANKING_TTL_MS = 10 * 60_000;
 const GAME_GENRE_IDS = new Set([
   6014, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009,
@@ -4839,6 +4850,7 @@ const FX_STATIC_TTL_MS = 30 * 60_000;
 const FX_STATIC_PER_CNY: Record<string, number> = {
   CNY: 1, USD: 0.1408, HKD: 1.176, JPY: 23.98, INR: 14.13, GBP: 0.1133,
   KRW: 200.4, SGD: 0.1931, TWD: 4.46, AUD: 0.2206, EUR: 0.1356, CAD: 0.2137, MOP: 1.211,
+  TRY: 7.51, NGN: 202.1, EGP: 7.99, BRL: 0.845, MXN: 2.777, RUB: 12.41,
 };
 type FxSnapshot = { at: number; rates: Record<string, number>; source: string };
 let fxCache: FxSnapshot | null = null;
@@ -4846,6 +4858,7 @@ let fxInflight: Promise<FxSnapshot> | null = null;
 const FX_SYMBOLS = [
   "CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD",
   "AUD", "EUR", "CAD", "MOP", "MYR", "THB", "IDR", "PHP", "VND", "RUB", "BRL",
+  "TRY", "NGN", "EGP",
 ];
 
 function sanitizeRates(input: unknown): Record<string, number> {
@@ -6267,6 +6280,70 @@ export const Actions = {
         if (typeof v === "number" && Number.isFinite(v) && v > 0) rates[code] = v;
       }
       return { base: "CNY" as const, rates, at: snap.at, source: snap.source };
+    },
+  }),
+
+  appStoreRegionPrices: defineAction({
+    description:
+      "Compares one app's price across 14 storefronts (CN/HK/TW/JP/KR/SG/US/GB/CA/AU/IN/TR/NG/EG) via Apple's iTunes lookup, returning local price, currency and store link per country so the client can rank them after RMB conversion. Cached 6 hours per trackId.",
+    request: z.object({
+      trackId: z.number().int().positive(),
+      countries: z.array(z.string().trim().min(2).max(2)).max(24).optional(),
+    }),
+    response: z.object({
+      trackId: z.number(),
+      at: z.number(),
+      prices: z.array(
+        z.object({
+          cc: z.string(),
+          currency: z.string(),
+          price: z.number().nullable(),
+          formattedPrice: z.string().nullable(),
+          storeUrl: z.string().nullable(),
+        }),
+      ),
+    }),
+    async handler(_ctx, args) {
+      const wanted = (args.countries?.length ? args.countries : PRICE_COMPARE_COUNTRIES).map((c) => c.toLowerCase());
+      const list = [...new Set(wanted)].filter((c) => /^[a-z]{2}$/.test(c)).slice(0, 24);
+      const key = `${args.trackId}:${list.join(",")}`;
+      const cached = priceCompareCache.get(key);
+      if (cached && Date.now() - cached.at < PRICE_COMPARE_TTL_MS) {
+        return { trackId: args.trackId, at: cached.at, prices: cached.prices };
+      }
+      const fetchOne = async (cc: string): Promise<RegionPriceOut> => {
+        try {
+          const res = await fetch(`https://itunes.apple.com/lookup?id=${args.trackId}&country=${cc}`, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!res.ok) return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
+          const body = (await res.json()) as { results?: Record<string, unknown>[] };
+          const row = Array.isArray(body.results) ? body.results[0] : undefined;
+          if (!row) return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
+          const price = typeof row.price === "number" && Number.isFinite(row.price) ? row.price : null;
+          return {
+            cc,
+            currency: String(row.currency ?? ""),
+            price,
+            formattedPrice: String(row.formattedPrice ?? "") || null,
+            storeUrl: String(row.trackViewUrl ?? "") || null,
+          };
+        } catch {
+          return { cc, currency: "", price: null, formattedPrice: null, storeUrl: null };
+        }
+      };
+      // Apple lookups are cheap but rate-limited; walk them 5 at a time.
+      const prices: RegionPriceOut[] = [];
+      for (let i = 0; i < list.length; i += 5) {
+        prices.push(...(await Promise.all(list.slice(i, i + 5).map(fetchOne))));
+      }
+      const at = Date.now();
+      priceCompareCache.set(key, { at, prices });
+      if (priceCompareCache.size > 300) {
+        for (const k of [...priceCompareCache.keys()].slice(0, 100)) priceCompareCache.delete(k);
+      }
+      return { trackId: args.trackId, at, prices };
     },
   }),
 

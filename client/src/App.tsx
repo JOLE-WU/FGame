@@ -257,13 +257,33 @@ function priceText(cents: number, currency: string): string {
 }
 
 /**
+ * 解析本地化价格字符串。土耳其/欧洲区把逗号当小数点（"₺114,99"），
+ * 直接删掉非数字会把 114,99 读成 11499，所以先判断哪个符号是小数点。
+ */
+function parsePriceAmount(label: string): number | null {
+  const raw = String(label ?? "").replace(/[^\d.,]/g, "");
+  if (!raw) return null;
+  const lastDot = raw.lastIndexOf(".");
+  const lastComma = raw.lastIndexOf(",");
+  let normalized = raw;
+  if (lastDot >= 0 && lastComma >= 0) {
+    normalized = lastComma > lastDot ? raw.replace(/\./g, "").replace(",", ".") : raw.replace(/,/g, "");
+  } else if (lastComma >= 0) {
+    // 只有逗号：三位整数位当千分位（1,234），否则当小数点（4,99）。
+    normalized = raw.length - lastComma - 1 === 3 ? raw.replace(/,/g, "") : raw.replace(",", ".");
+  }
+  const n = Number(normalized);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * 外区榜单价格补一个人民币参考价。`rate` 是「1 CNY 兑多少该币种」，
  * 所以人民币 = 原价 / rate。数据取不到就返回 null（前端直接不显示）。
  */
 function cnyApprox(priceLabel: string, rate: number | undefined): string | null {
   if (!rate || !Number.isFinite(rate) || rate <= 0) return null;
-  const amount = Number(String(priceLabel ?? "").replace(/[^\d.]/g, ""));
-  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const amount = parsePriceAmount(priceLabel);
+  if (amount == null || amount <= 0) return null;
   const cny = amount / rate;
   if (!Number.isFinite(cny) || cny <= 0) return null;
   if (cny >= 100) return `≈¥${Math.round(cny)}`;
@@ -291,7 +311,13 @@ function rateFor(rates: Record<string, number> | null | undefined, currency: str
 function useCnyRates(enabled: boolean) {
   const query = useQuery({
     queryKey: ["fxRates"],
-    queryFn: () => api.fxRates({ symbols: ["CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD", "AUD", "EUR", "CAD", "MOP"] }),
+    queryFn: () =>
+      api.fxRates({
+        symbols: [
+          "CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD",
+          "AUD", "EUR", "CAD", "MOP", "TRY", "NGN", "EGP",
+        ],
+      }),
     staleTime: 6 * 60 * 60_000,
     enabled,
   });
@@ -2283,7 +2309,16 @@ const RANK_REGIONS = [
   { cc: "jp", label: "日区" },
   { cc: "hk", label: "港区" },
   { cc: "in", label: "印度区" },
+  { cc: "tr", label: "土耳其区" },
+  { cc: "ng", label: "尼日利亚区" },
+  { cc: "eg", label: "埃及区" },
 ];
+// 详情页「各区价格对比」用的地区中文名（比筛选标签更正式，含港澳台表述）。
+const PRICE_REGION_LABEL: Record<string, string> = {
+  cn: "中国", hk: "中国香港", tw: "中国台湾", jp: "日本", kr: "韩国", sg: "新加坡",
+  us: "美国", gb: "英国", ca: "加拿大", au: "澳大利亚", in: "印度",
+  tr: "土耳其", ng: "尼日利亚", eg: "埃及",
+};
 // App Store 官方游戏分类 ID（iTunes RSS genre）。6014 = 游戏总榜。
 const RANK_GAME_GENRES = [
   { id: 6014, label: "全部游戏" },
@@ -2324,11 +2359,17 @@ function FilterChip({ active, onClick, children }: { active: boolean; onClick: (
   );
 }
 
-function FilterRow({ label, children }: { label: string; children: ReactNode }) {
+function FilterRow({ label, children, wrap }: { label: string; children: ReactNode; wrap?: boolean }) {
   return (
-    <div className="mt-2.5 flex items-center gap-2">
-      <span className="flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)]">{label}</span>
-      <div className="-mx-1 flex flex-1 gap-[6px] overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">{children}</div>
+    <div className={wrap ? "mt-2.5 flex items-start gap-2" : "mt-2.5 flex items-center gap-2"}>
+      <span className={`flex-none font-mono text-[9px] font-semibold uppercase tracking-[0.12em] text-[var(--dim2)] ${wrap ? "pt-[7px]" : ""}`}>{label}</span>
+      <div
+        className={`-mx-1 flex flex-1 gap-[6px] px-1 [scrollbar-width:none] ${
+          wrap ? "flex-wrap [&::-webkit-scrollbar]:hidden" : "overflow-x-auto [&::-webkit-scrollbar]:hidden"
+        }`}
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -2434,6 +2475,135 @@ function useRankingSwipeBack(onClose: () => void) {
   };
 }
 
+/** 人民币金额：小额留两位、大额取整，避免一列数字位数乱跳。 */
+function cnyAmount(cny: number): string {
+  if (cny >= 100) return String(Math.round(cny));
+  if (cny >= 10) return cny.toFixed(1);
+  return cny.toFixed(2);
+}
+
+/**
+ * Apple 各区的 formattedPrice 有时只给一个「$」或「¥」，在跨区对比里会和
+ * 美元 / 人民币撞脸（台湾区就是 "$235.00"），补上当地惯用符号。
+ */
+const PRICE_SYMBOL_FIX: Record<string, { from: string; to: string }> = {
+  TWD: { from: "$", to: "NT$" },
+  CAD: { from: "$", to: "CA$" },
+  AUD: { from: "$", to: "A$" },
+  SGD: { from: "$", to: "S$" },
+  MXN: { from: "$", to: "MX$" },
+  JPY: { from: "¥", to: "JP¥" },
+};
+
+function displayPrice(formatted: string | null, currency: string): string {
+  if (!formatted) return "—";
+  const fix = PRICE_SYMBOL_FIX[currency.toUpperCase()];
+  if (fix && formatted.trimStart().startsWith(fix.from)) {
+    return fix.to + formatted.trimStart().slice(fix.from.length);
+  }
+  return formatted;
+}
+
+/**
+ * 详情页「各区价格对比」：同一个 trackId 在 14 个 storefront 的实际售价，
+ * 统一折算成人民币后从低到高排，回答「这个价在别的区买要多少」。
+ */
+function RegionPriceCompare({
+  trackId,
+  currentCc,
+  rates,
+}: {
+  trackId: number;
+  currentCc: string;
+  rates: Record<string, number> | null;
+}) {
+  const query = useQuery({
+    queryKey: ["regionPrices", trackId],
+    queryFn: () => api.appStoreRegionPrices({ trackId }),
+    staleTime: 6 * 60 * 60_000,
+  });
+  const rows = (query.data?.prices ?? [])
+    .map((p) => {
+      const rate = rateFor(rates, p.currency, p.cc);
+      const cny = p.price != null && p.price > 0 && rate ? p.price / rate : p.price === 0 ? 0 : null;
+      return { ...p, cny };
+    })
+    .sort((a, b) => {
+      if (a.cny == null) return b.cny == null ? a.cc.localeCompare(b.cc) : 1;
+      if (b.cny == null) return -1;
+      return a.cny - b.cny;
+    });
+  const cheapest = rows.find((r) => r.cny != null && r.cny > 0) ?? null;
+  const current = rows.find((r) => r.cc === currentCc) ?? null;
+  const saving =
+    cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
+
+  return (
+    <section className="mt-6" data-region-prices>
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <h2 className="text-[13px] font-bold text-[var(--text)]">各区价格对比</h2>
+        <span className="font-mono text-[9px] text-[var(--dim2)]">按人民币折算排序</span>
+      </div>
+      {query.isPending ? (
+        <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-6 text-center text-[12px] text-[var(--dim)]">
+          正在读取各区价格…
+        </p>
+      ) : query.isError || rows.length === 0 ? (
+        <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-6 text-center text-[12px] text-[var(--dim)]">
+          暂时读不到各区价格，稍后再试
+        </p>
+      ) : (
+        <>
+          <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim)]">
+            {cheapest?.cny == null
+              ? "暂未取到汇率，暂时无法比较"
+              : current?.cny && cheapest.cc !== current.cc
+                ? `最低在${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}），比当前区便宜约 ${Math.round(saving * 100)}%。换算按当日汇率，仅供参考。`
+                : `当前区已经是这 ${rows.length} 个区里最便宜的。换算按当日汇率，仅供参考。`}
+          </p>
+          <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
+            {rows.map((r, i) => {
+              const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;
+              return (
+                <a
+                  key={r.cc}
+                  href={r.storeUrl ?? "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-region-row={r.cc}
+                  aria-label={`${PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()} 价格 ${r.cny == null ? "未上架" : displayPrice(r.formattedPrice, r.currency)}`}
+                  className={`flex items-center gap-2 px-3 py-[9px] ${i ? "border-t border-[var(--border)]" : ""} ${
+                    r.cc === currentCc ? "bg-[var(--surface2)]" : ""
+                  } ${r.cny == null ? "opacity-45" : "active:opacity-70"}`}
+                >
+                  <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--text)]">
+                    <span className="mr-2 font-mono text-[9px] font-bold tracking-[0.08em] text-[var(--dim2)]">
+                      {r.cc.toUpperCase()}
+                    </span>
+                    {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
+                  </span>
+                  {isLow ? (
+                    <span className="flex-none rounded-full bg-[var(--accent)] px-1.5 py-[1px] text-[9px] font-bold text-[var(--accent-ink)]">最低</span>
+                  ) : null}
+                  {r.cc === currentCc ? (
+                    <span className="flex-none rounded-full border border-[var(--border)] px-1.5 py-[1px] text-[9px] font-bold text-[var(--dim)]">当前</span>
+                  ) : null}
+                  <span className="w-[80px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
+                    {r.cny == null ? "未上架" : displayPrice(r.formattedPrice, r.currency)}
+                  </span>
+                  <span className="w-[58px] flex-none text-right font-mono text-[12px] font-bold text-[var(--accent)]">
+                    {r.cny == null ? "—" : r.cny === 0 ? "免费" : `¥${cnyAmount(r.cny)}`}
+                  </span>
+                </a>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 /**
  * 榜单条目详情：先落在应用内，再让用户决定去 App Store 或加关注。
  * 用 portal 挂到 body，避免被下拉刷新给 <main> 加的 transform 困住。
@@ -2462,8 +2632,10 @@ function RankingDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const dev = useAppStoreDeveloper(app.trackId, meta.cc);
-  const showCny = needsCnyPrice(meta.cc, meta.chartLabel === "付费榜" ? "paid" : "free");
-  const rates = useCnyRates(showCny);
+  const isPaid = meta.chartLabel === "付费榜";
+  const showCny = needsCnyPrice(meta.cc, isPaid ? "paid" : "free");
+  // 付费榜详情要用汇率做「各区价格对比」，国区也不例外。
+  const rates = useCnyRates(isPaid);
   const cny = showCny ? cnyApprox(app.price, rateFor(rates, app.currency, meta.cc)) : null;
 
   const release = app.releaseDate ? String(app.releaseDate).slice(0, 10) : "";
@@ -2536,6 +2708,8 @@ function RankingDetail({
             </div>
           ))}
         </dl>
+
+        {isPaid ? <RegionPriceCompare trackId={app.trackId} currentCc={meta.cc} rates={rates} /> : null}
 
         <AppStoreProfile trackId={app.trackId} country={meta.cc} />
       </div>
@@ -2720,7 +2894,7 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
   };
   return (
     <div className="mt-4 pb-2" data-board="ranking">
-      <FilterRow label="区服">
+      <FilterRow label="区服" wrap>
         {RANK_REGIONS.map((r) => (
           <FilterChip key={r.cc} active={cc === r.cc} onClick={() => setCc(r.cc)}>{r.label}</FilterChip>
         ))}
