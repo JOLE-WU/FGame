@@ -2692,6 +2692,9 @@ function RegionPriceCompare({
     queryFn: () => api.appStoreRegionPrices({ trackId, cc: currentCc, name: currentName }),
     staleTime: 6 * 60 * 60_000,
   });
+  // 「本体 | 内购」不像以前那样上下叠两块表，改成标题行右侧的切换：
+  // 同一块位置切两种口径，手机上少滚一屏。
+  const [priceView, setPriceView] = useState<"base" | "iap">("base");
   const rows = (query.data?.prices ?? [])
     .map((p) => {
       const rate = rateFor(rates, p.currency, p.cc);
@@ -2725,12 +2728,48 @@ function RegionPriceCompare({
     : "";
 
   return (
-    <section className="mt-6" data-region-prices>
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <h2 className="text-[13px] font-bold text-[var(--text)]">各区价格对比</h2>
-        <span className="font-mono text-[9px] text-[var(--dim2)]">按人民币折算排序</span>
+    <section className="mt-6" data-region-prices data-price-view={priceView}>
+      <div className="mb-2 flex items-center gap-2">
+        <h2 className="flex-none text-[13px] font-bold text-[var(--text)]">各区价格对比</h2>
+        {/* 口径切换：本体价 / 内购起价，位置就在标题右侧这块空白。 */}
+        <div
+          role="tablist"
+          aria-label="价格对比口径"
+          data-price-switch
+          className="ml-auto flex flex-none items-center gap-[2px] rounded-full border border-[var(--border)] bg-[var(--surface2)] p-[2px]"
+        >
+          {([
+            ["base", "本体"],
+            ["iap", "内购"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={priceView === id}
+              data-price-tab={id}
+              onClick={() => setPriceView(id)}
+              className={`rounded-full px-[9px] py-[3.5px] text-[10.5px] font-bold leading-none transition-colors ${
+                priceView === id ? "bg-grad text-[var(--accent-ink)]" : "text-[var(--dim)]"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="w-[78px] flex-none text-right font-mono text-[9px] leading-[1.25] text-[var(--dim2)]">
+          {priceView === "base" ? "按人民币折算排序" : "按内购起价排序"}
+        </span>
       </div>
-      {query.isPending ? (
+      {priceView === "iap" ? (
+        withPrice.length ? (
+          <IapPriceCompare trackId={trackId} rows={withPrice} rates={rates} onOpenRegion={onOpenRegion} />
+        ) : (
+          <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-6 text-center text-[12px] text-[var(--dim)]">
+            正在读取各区价格…
+          </p>
+        )
+      ) : query.isPending ? (
         <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-6 text-center text-[12px] text-[var(--dim)]">
           正在读取各区价格…
         </p>
@@ -2840,15 +2879,14 @@ function RegionPriceCompare({
           </div>
         </>
       )}
-      <IapPriceCompare trackId={trackId} rows={withPrice} rates={rates} onOpenRegion={onOpenRegion} />
     </section>
   );
 }
 
 /**
- * 「本体 | 内购」两列对照。Apple 的 iTunes 接口不返回内购，内购价只能从各区商品页读取，
- * 而且各区页面按访问来源放开（境外区在境内会被 302 重定向）——读不到的区显式标「—」，
- * 不能拿别区的价格顶替。
+ * 「本体 | 内购」切换里的内购表。Apple 的 iTunes 接口不返回内购，内购价只能从各区商品页读取，
+ * 而且各区页面按访问来源放开（境外区在境内会被 302 重定向）——读不到的区合并成一句说明，
+ * 不占十几行「—」，也绝不拿别区的价格顶替。
  */
 function IapPriceCompare({
   trackId,
@@ -2869,30 +2907,46 @@ function IapPriceCompare({
   });
   if (!rows.length) return null;
   const byCc = new Map((query.data?.rows ?? []).map((r) => [r.cc, r]));
+  // 内购价统一折成人民币当主口径（和本体列右列一致），本币只做副行备注。
+  const enriched = rows.map((r) => {
+    const iap = byCc.get(r.cc);
+    const rate = rateFor(rates, iap?.currency ?? r.currency, r.cc);
+    const cny = iap?.minPrice != null && rate ? iap.minPrice / rate : null;
+    return { r, iap, cny };
+  });
+  const readable = enriched
+    .filter((x) => x.iap?.available)
+    .sort((a, b) => {
+      if (a.cny == null) return b.cny == null ? 0 : 1;
+      if (b.cny == null) return -1;
+      return a.cny - b.cny;
+    });
+  const unreadable = enriched.filter((x) => !x.iap?.available);
   return (
-    <div className="mt-6" data-iap-prices>
-      <div className="mb-2 flex items-baseline justify-between gap-3">
-        <h2 className="text-[13px] font-bold text-[var(--text)]">内购价格对比</h2>
-        <span className="font-mono text-[9px] text-[var(--dim2)]">本体 | 内购</span>
-      </div>
+    <div data-iap-prices>
+      <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim)]">
+        内购取该区公示的最低一档，已折成人民币（Apple 每区最多列 10 项）。
+      </p>
       {query.isPending ? (
         <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-5 text-center text-[12px] text-[var(--dim)]">
-          正在读取各区內购…
+          正在读取各区内购…
+        </p>
+      ) : readable.length === 0 ? (
+        <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-5 text-center text-[12px] text-[var(--dim)]">
+          这 {rows.length} 个区的内购价都没读到，稍后再试
         </p>
       ) : (
         <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
           <div className="flex items-center gap-2 border-b border-[var(--border)] bg-[var(--surface2)] px-3 py-[6px] font-mono text-[9px] font-bold uppercase tracking-[0.08em] text-[var(--dim2)]">
             <span className="w-[22px] flex-none">区</span>
             <span className="min-w-0 flex-1">区服</span>
-            <span className="w-[76px] flex-none text-right">本体</span>
-            <span className="w-[88px] flex-none text-right">内购</span>
+            <span className="w-[70px] flex-none text-right">本体</span>
+            <span className="w-[84px] flex-none text-right">内购起价</span>
             <span className="w-[11px] flex-none" />
           </div>
-          {rows.map((r, i) => {
-            const iap = byCc.get(r.cc);
-            const rate = rateFor(rates, iap?.currency ?? r.currency, r.cc);
-            const cny = iap?.minPrice != null && rate ? iap.minPrice / rate : null;
+          {readable.map(({ r, iap, cny }, i) => {
             const focused = PRICE_FOCUS_REGIONS.has(r.cc);
+            const sameCcy = (iap?.currency ?? "").toUpperCase() === "CNY";
             return (
               <button
                 key={r.cc}
@@ -2913,32 +2967,36 @@ function IapPriceCompare({
                 <span className={`min-w-0 flex-1 truncate text-[12px] ${focused ? "font-bold" : ""} text-[var(--text)]`}>
                   {PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase()}
                 </span>
-                <span className="w-[76px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
+                <span className="w-[70px] flex-none text-right text-[11px] font-medium text-[var(--dim)]">
                   {r.price === 0 ? "免费" : displayPrice(r.formattedPrice, r.currency)}
                 </span>
-                <span className="w-[88px] flex-none text-right">
-                  {iap?.available ? (
-                    iap.minPrice != null ? (
-                      <>
-                        <span className="block text-[11px] font-medium leading-tight text-[var(--text)]">
-                          {displayPrice(iap.minFormatted, iap.currency)}
-                          <span className="text-[9px] font-normal text-[var(--dim2)]"> 起</span>
-                        </span>
-                        <span className="block font-mono text-[9px] leading-tight text-[var(--accent)]">
-                          {cny != null ? `≈¥${cnyAmount(cny)}` : "汇率缺失"}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-[11px] text-[var(--dim2)]">无内购</span>
-                    )
+                <span className="w-[84px] flex-none text-right" data-iap-cny={cny != null ? cny.toFixed(2) : undefined}>
+                  {iap?.minPrice != null ? (
+                    <>
+                      <span className="block font-mono text-[12px] font-bold leading-tight text-[var(--accent)]">
+                        {cny != null ? `¥${cnyAmount(cny)}` : "—"}
+                      </span>
+                      <span className="block text-[9px] leading-tight text-[var(--dim2)]">
+                        {cny == null ? "汇率缺失" : sameCcy ? "起" : `${displayPrice(iap.minFormatted, iap.currency)} 起`}
+                      </span>
+                    </>
                   ) : (
-                    <span className="text-[11px] text-[var(--dim2)]">—</span>
+                    <span className="text-[11px] text-[var(--dim2)]">无内购</span>
                   )}
                 </span>
                 <span aria-hidden className="w-[11px] flex-none font-mono text-[10px] text-[var(--dim2)]">›</span>
               </button>
             );
           })}
+          {unreadable.length ? (
+            <div
+              className="border-t border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[10px] leading-relaxed text-[var(--dim2)]"
+              data-iap-unreadable
+            >
+              读不到 {unreadable.length} 个区：{unreadable.map((x) => x.r.cc.toUpperCase()).join(" · ")}
+              （Apple 按访问地区限制商品页，不拿别区价格顶替）
+            </div>
+          ) : null}
         </div>
       )}
     </div>
