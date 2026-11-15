@@ -143,8 +143,9 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.13 | 19 | `FGame-v1.0.13-b19-unsigned.ipa` | 历史限免曲线、Arcade 详情、排行榜详情进站内 |
 | 1.0.14 | 20 | `FGame-v1.0.14-b20-unsigned.ipa` | 价格曲线移入 App 详情、App Store 官方资料、全区服翻译、四分类横切、内购跨区、降价详情、底部黑边（第 20–23 行） |
 | 1.0.15 | 21 | `FGame-v1.0.15-b21-unsigned.ipa` | 搜索框缩进「应用」标题右侧、三板块切换条上移到标题下方（第 24 行） |
+| 1.0.16 | 22 | `FGame-v1.0.16-b22-unsigned.ipa` | 区服改分类行右侧小下拉、搜索结果与关注条目点进站内详情（`StoreDetail`）、搜索回车自动收键盘、APP 页分类行极简为「本体｜内购｜降价｜关注」、分类行与下拉垂直对齐（第 25–27 行） |
 
-同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.15 (21)` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
+同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.16 (22)` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 
 ---
 
