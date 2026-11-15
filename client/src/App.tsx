@@ -2600,12 +2600,8 @@ function RegionAppSheet({
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">
               {label} · {row.cc.toUpperCase()}
-              {isLocalRelease ? " · 本地发行版" : ""}
             </div>
             <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{name}</h1>
-            {!sameTitle(name, baseName) ? (
-              <p className="mt-1 text-[11px] leading-snug text-[var(--dim2)]">你所在区的名称：{baseName}</p>
-            ) : null}
           </div>
           <AppStoreGetFollow
             getLabel={row.price === 0 ? "获取" : price}
@@ -2633,6 +2629,20 @@ function RegionAppSheet({
               {isLocalRelease ? "本区单独上架" : "与其它区同一个 App"}
             </dd>
           </div>
+          {!sameTitle(name, baseName) ? (
+            <div className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">你所在区名称</dt>
+              <dd className="min-w-0 truncate text-right font-medium text-[var(--text)]">{baseName}</dd>
+            </div>
+          ) : null}
+          {row.aliasOf ? (
+            <div className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">对应版本</dt>
+              <dd className="min-w-0 truncate text-right font-medium text-[var(--text)]" data-region-alias-of>
+                {row.aliasOf}
+              </dd>
+            </div>
+          ) : null}
           {row.bundleId ? (
             <div className="flex justify-between gap-4">
               <dt className="shrink-0 text-[var(--dim)]">Bundle ID</dt>
@@ -2685,10 +2695,8 @@ function RegionPriceCompare({
   // 大部分 App 只在一部分区上架（国区独占很常见），未上架的别占一整行。
   const withPrice = rows.filter((r) => r.cny != null);
   const missing = rows.filter((r) => r.cny == null);
-  // 只有同一个 App（match=same）之间比价才成立；本地发行版口径不同，单独标出来。
-  const comparable = withPrice.filter((r) => r.match === "same");
-  const pool = comparable.length ? comparable : withPrice;
-  const cheapest = pool.find((r) => r.cny != null && r.cny > 0) ?? null;
+  // 免费（含内购）的本地版没有可比价，0 元不参与「最低」；其余含本地发行版一起排。
+  const cheapest = withPrice.find((r) => r.cny != null && r.cny > 0) ?? null;
   const current = rows.find((r) => r.cc === currentCc) ?? null;
   const saving = cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
   const aliases = rows.filter((r) => r.match === "alias");
@@ -2715,11 +2723,13 @@ function RegionPriceCompare({
               ? "这 14 个区服都没上架这款 App，暂时无法比较。"
               : cheapest?.cny == null
                 ? "暂未取到汇率，暂时无法比较"
-                : current?.cny && cheapest.cc !== current.cc
-                  ? `最低在${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}），比当前区便宜约 ${Math.round(saving * 100)}%。换算按当日汇率，仅供参考。`
-                  : withPrice.length === 1
-                    ? `目前只有${PRICE_REGION_LABEL[currentCc] ?? currentCc.toUpperCase()}上架，其余区服未上架。`
-                    : `当前区已经是这 ${withPrice.length} 个有货区里最便宜的。换算按当日汇率，仅供参考。`}
+                : current?.cny === 0
+                  ? `当前区免费（含内购），和买断价不是一套口径；最便宜的付费区是${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}）。`
+                  : current?.cny && cheapest.cc !== current.cc
+                    ? `最低在${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}），比当前区便宜约 ${Math.round(saving * 100)}%。换算按当日汇率，仅供参考。`
+                    : withPrice.length === 1
+                      ? `目前只有${PRICE_REGION_LABEL[currentCc] ?? currentCc.toUpperCase()}上架，其余区服未上架。`
+                      : `当前区已经是这 ${withPrice.length} 个有货区里最便宜的。换算按当日汇率，仅供参考。`}
           </p>
           <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
             {withPrice.map((r, i) => {
@@ -2782,7 +2792,9 @@ function RegionPriceCompare({
             {renamed
               ? `各区标题会本地化，这 ${renamed} 个区的写法与当前区不同（行内第二行是本区名称）；同款按 Apple 的 trackId / bundleId 认定。`
               : "各区标题一致，均按同一 trackId 认定。"}
-            {aliases.length ? `「本地版」是当地单独上架的版本（不同 bundleId），价格口径可能不同，不参与最低价比较。` : ""}
+            {aliases.length
+              ? `标「本地版」的 ${aliases.length} 个区是当地单独上架的同一款（不同 trackId / bundleId，名称也本地化过），价格按该区实际售价显示；免费含内购的版本不参与最低价比较。`
+              : ""}
             点任意一行可看该区详情页。
           </p>
         </>

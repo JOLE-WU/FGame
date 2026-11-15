@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { and, asc, desc, eq, inArray, isNotNull, ne } from "drizzle-orm";
 import * as schema from "./schema";
+import { REGION_ALIAS_GROUPS, type RegionAliasGroup } from "./data/regionAlias";
 
 // ---------- shared shapes ----------
 
@@ -4826,8 +4827,10 @@ type RegionPriceOut = {
   bundleId: string | null;
   artistName: string | null;
   iconUrl: string | null;
-  /** same = 同一个 trackId / bundleId；alias = 名称对上的同期版本；none = 该区没找到。 */
+  /** same = 同一个 trackId / bundleId；alias = 同一款游戏的本地发行版本；none = 该区没找到。 */
   match: RegionPriceMatch;
+  /** match=alias 时说明它对应哪一款，例如「泰拉瑞亚 ↔ Terraria」。 */
+  aliasOf: string | null;
 };
 
 /** 名称归一化：去掉副标题标点与大小写差异，只留下可比较的主体。 */
@@ -4849,6 +4852,13 @@ function appNameTerms(raw: string): string[] {
   return [...new Set(terms)];
 }
 const priceCompareCache = new Map<string, { at: number; prices: RegionPriceOut[] }>();
+/** trackId -> 它所属的「同一款游戏、不同区各一个 SKU」分组（由图标指纹建表）。 */
+const regionAliasByTrackId = new Map<number, RegionAliasGroup>();
+for (const group of REGION_ALIAS_GROUPS) {
+  for (const id of Object.values(group.members)) {
+    if (!regionAliasByTrackId.has(id)) regionAliasByTrackId.set(id, group);
+  }
+}
 const APP_RANKING_TTL_MS = 10 * 60_000;
 const GAME_GENRE_IDS = new Set([
   6014, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009,
@@ -6337,6 +6347,7 @@ export const Actions = {
           artistName: z.string().nullable(),
           iconUrl: z.string().nullable(),
           match: z.enum(["same", "alias", "none"]),
+          aliasOf: z.string().nullable(),
         }),
       ),
     }),
@@ -6363,6 +6374,7 @@ export const Actions = {
         artistName: null,
         iconUrl: null,
         match: "none",
+        aliasOf: null,
       });
       const fromRow = (cc: string, row: Record<string, unknown>, match: RegionPriceMatch): RegionPriceOut => ({
         cc,
@@ -6376,18 +6388,19 @@ export const Actions = {
         artistName: text(row.artistName),
         iconUrl: text(row.artworkUrl100) ?? text(row.artworkUrl60),
         match,
+        aliasOf: null,
       });
 
-      const lookupOne = async (cc: string): Promise<RegionPriceOut> => {
+      const lookupOne = async (cc: string, id = args.trackId, match: RegionPriceMatch = "same"): Promise<RegionPriceOut> => {
         try {
-          const res = await fetch(`https://itunes.apple.com/lookup?id=${args.trackId}&country=${cc}`, {
+          const res = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${cc}`, {
             headers: { "User-Agent": "Mozilla/5.0" },
             signal: AbortSignal.timeout(10_000),
           });
           if (!res.ok) return blank(cc);
           const body = (await res.json()) as { results?: Record<string, unknown>[] };
           const row = Array.isArray(body.results) ? body.results[0] : undefined;
-          return row ? fromRow(cc, row, "same") : blank(cc);
+          return row ? fromRow(cc, row, match) : blank(cc);
         } catch {
           return blank(cc);
         }
@@ -6396,7 +6409,30 @@ export const Actions = {
       // Apple lookups are cheap but rate-limited; walk them 5 at a time.
       const prices: RegionPriceOut[] = [];
       for (let i = 0; i < list.length; i += 5) {
-        prices.push(...(await Promise.all(list.slice(i, i + 5).map(lookupOne))));
+        prices.push(...(await Promise.all(list.slice(i, i + 5).map((cc) => lookupOne(cc)))));
+      }
+
+      // 国服/日服常由代理单独上架，trackId 完全不同，lookup 不到并不代表「没上架」。
+      // 命中对照表时用另一版的 id 补位，价格仍按该区实际售价展示，标成 alias。
+      const aliasGroup = regionAliasByTrackId.get(args.trackId);
+      if (aliasGroup) {
+        const gaps = prices.filter((r) => r.match === "none");
+        for (let i = 0; i < gaps.length; i += 5) {
+          const batch = gaps.slice(i, i + 5);
+          const filled = await Promise.all(
+            batch.map(async (r) => {
+              const alt = aliasGroup.members[r.cc] ?? aliasGroup.members["default"];
+              if (!alt || alt === args.trackId) return null;
+              const row = await lookupOne(r.cc, alt, "alias");
+              return row.match === "alias" ? { ...row, aliasOf: aliasGroup.label } : null;
+            }),
+          );
+          for (const row of filled) {
+            if (!row) continue;
+            const at = prices.findIndex((p) => p.cc === row.cc);
+            if (at >= 0) prices[at] = row;
+          }
+        }
       }
 
       // 基准：优先用当前区，其次第一个命中的区。

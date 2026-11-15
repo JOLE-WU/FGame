@@ -1,0 +1,436 @@
+{
+  "generatedAt": "2026-11-15T14:58:50+08:00",
+  "trusted": 7,
+  "groups": [
+    {
+      "distance": 0,
+      "cn": {
+        "trackId": 1157863540,
+        "name": "泰拉瑞亚",
+        "artist": "X.D. Network Inc.",
+        "genre": "游戏",
+        "price": "¥18.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/63/24/4e/63244e18-5887-55e0-65fb-a05d5cd1c804/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 8244236262370226658
+      },
+      "global": {
+        "trackId": 640364616,
+        "name": "Terraria",
+        "artist": "505 Games (US), Inc.",
+        "genre": "Games",
+        "price": "$4.99",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/02/eb/57/02eb5740-ae95-86fd-0000-f0a64ab1a392/AppIcon-1x_U007emarketing-0-8-0-85-220-0.png/100x100bb.png",
+        "cc": "us",
+        "hash": 8244236262370226658
+      },
+      "members": {
+        "cn": 1157863540,
+        "default": 640364616,
+        "hk": 1609910024,
+        "tw": 1609910024,
+        "jp": 793660476
+      },
+      "variants": {
+        "hk": {
+          "trackId": 1609910024,
+          "name": "泰拉瑞亞",
+          "artist": "X.D. Network Inc.",
+          "bundle": "com.xd.terraria.global",
+          "price": "HK$ 28.00",
+          "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/54/bc/5c/54bc5c32-c077-2e05-dbd1-2a61da7ea2b6/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.jpg",
+          "cc": "hk"
+        },
+        "tw": {
+          "trackId": 1609910024,
+          "name": "泰拉瑞亞",
+          "artist": "X.D. Network Inc.",
+          "bundle": "com.xd.terraria.global",
+          "price": "$120.00",
+          "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/54/bc/5c/54bc5c32-c077-2e05-dbd1-2a61da7ea2b6/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.jpg",
+          "cc": "tw"
+        },
+        "jp": {
+          "trackId": 793660476,
+          "name": "テラリア",
+          "artist": "Spike-Chunsoft CO, LTD.",
+          "bundle": "jp.co.spike-chunsoft.terrariajp",
+          "price": "¥800",
+          "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/14/38/ea/1438ea53-df99-0977-bba9-7c7dd0e1e26e/AppIcon-1x_U007emarketing-0-8-0-85-220-0.png/100x100bb.jpg",
+          "cc": "jp"
+        }
+      },
+      "label": "泰拉瑞亚 ↔ Terraria"
+    },
+    {
+      "distance": 0,
+      "cn": {
+        "trackId": 6757729278,
+        "name": "劫后公司",
+        "artist": "DIVASKY LIMITED",
+        "genre": "游戏",
+        "price": "¥12.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/c1/c5/c9/c1c5c9eb-9195-d3d5-a09a-872d95c7d18c/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 1091390377566087959
+      },
+      "global": {
+        "trackId": 1631859420,
+        "name": "After Inc.",
+        "artist": "Ndemic Creations",
+        "genre": "Games",
+        "price": "$1.99",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/92/1e/e6/921ee6fc-a800-7c3e-4f45-e5996ab23d13/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "us",
+        "hash": 1091390377566087959
+      },
+      "members": {
+        "cn": 6757729278,
+        "default": 1631859420
+      },
+      "variants": {},
+      "label": "劫后公司 ↔ After Inc."
+    },
+    {
+      "distance": 0,
+      "cn": {
+        "trackId": 6737795387,
+        "name": "鬼谷八荒",
+        "artist": "Guangzhou Dahuang Network Technology Co., Ltd.",
+        "genre": "游戏",
+        "price": "¥38.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/aa/e6/3f/aae63fee-ddb1-d098-28f6-58092f683774/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3490514857472469169
+      },
+      "global": {
+        "trackId": 6742472194,
+        "name": "鬼谷八荒 Tale of Immortal",
+        "artist": "WENXIN Games",
+        "genre": "遊戲",
+        "price": "$220.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/5c/10/cc/5c10cc42-6c03-a3e1-4edb-09c0a72627ec/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "tw",
+        "hash": 3490514857472469169
+      },
+      "members": {
+        "cn": 6737795387,
+        "default": 6742472194
+      },
+      "variants": {},
+      "label": "鬼谷八荒 ↔ 鬼谷八荒 Tale of Immortal"
+    },
+    {
+      "distance": 0,
+      "cn": {
+        "trackId": 6443786927,
+        "name": "全面憨憨战争模拟器",
+        "artist": "X.D. Network Inc.",
+        "genre": "游戏",
+        "price": "¥18.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/59/fc/0f/59fc0f1c-09b7-15dd-b08d-1a90440ea9fd/AppIcon-1x_U007emarketing-0-8-0-85-220-0.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 5536283818020858225
+      },
+      "global": {
+        "trackId": 6743115658,
+        "name": "TABS Pocket Edition",
+        "artist": "Landfall Games",
+        "genre": "遊戲",
+        "price": "$100.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/dc/7f/75/dc7f75c6-81f2-e048-d0a2-675fd8e4c875/AppIcon-1x_U007emarketing-0-8-0-85-220-0.png/100x100bb.png",
+        "cc": "tw",
+        "hash": 5536283818020858225
+      },
+      "members": {
+        "cn": 6443786927,
+        "default": 6743115658
+      },
+      "variants": {},
+      "label": "全面憨憨战争模拟器 ↔ TABS Pocket Edition"
+    },
+    {
+      "distance": 0,
+      "cn": {
+        "trackId": 6502489827,
+        "name": "大侠立志传",
+        "artist": "X.D. Network Inc.",
+        "genre": "游戏",
+        "price": "¥25.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/33/c8/8c/33c88c5c-324e-09eb-40c9-1fe3da98d636/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 17788859972927258586
+      },
+      "global": {
+        "trackId": 6711347049,
+        "name": "大俠立志傳",
+        "artist": "X.D. Network Inc.",
+        "genre": "遊戲",
+        "price": "HK$ 58.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/6b/92/1f/6b921fe4-bee4-1ca3-a5c9-867135fee5e8/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "hk",
+        "hash": 17788859972927258586
+      },
+      "members": {
+        "cn": 6502489827,
+        "default": 6711347049
+      },
+      "variants": {},
+      "label": "大侠立志传 ↔ 大俠立志傳"
+    },
+    {
+      "distance": 5,
+      "cn": {
+        "trackId": 1164801111,
+        "name": "AutoSleep - 苹果手表睡眠监测，睡觉记录及智能闹钟",
+        "artist": "Tantsissa",
+        "genre": "健康健美",
+        "price": "¥38.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/3b/00/cc/3b00ccbb-dfa7-03f5-744e-93a514fcc58d/AppIcon-0-0-1x_U007ephone-0-1-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3821105577801090823
+      },
+      "global": {
+        "trackId": 6746705608,
+        "name": "AutoSnore: いびきレコーダー",
+        "artist": "Tantsissa",
+        "genre": "メディカル",
+        "price": "¥800",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/b3/f6/95/b3f69583-5d59-be31-99b4-92228ea153b3/AppIcon-0-0-1x_U007ephone-0-1-85-220.png/100x100bb.png",
+        "cc": "jp",
+        "hash": 1515262585767266050
+      },
+      "members": {
+        "cn": 1164801111
+      },
+      "variants": {},
+      "label": "AutoSleep - 苹果手表睡眠监测，睡觉记录及智能闹钟 ↔ AutoSnore: いびきレコーダー"
+    },
+    {
+      "distance": 1,
+      "cn": {
+        "trackId": 1517349382,
+        "name": "群雄时代 - 单机三国战棋策略游戏",
+        "artist": "Yanyue Games",
+        "genre": "游戏",
+        "price": "¥1.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/90/be/8e/90be8e18-31ce-8e17-2ef7-94f496599491/AppIcon-0-0-1x_U007emarketing-0-10-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3632958889241005275
+      },
+      "global": {
+        "trackId": 1450144092,
+        "name": "三國志天下布武 - 單機戰棋策略遊戲",
+        "artist": "Yanyue Games",
+        "genre": "遊戲",
+        "price": "HK$ 2.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/8b/fd/ea/8bfdea67-c122-fa01-1cc4-721e6efcde6d/AppIcon-0-0-1x_U007emarketing-0-10-0-85-220.png/100x100bb.png",
+        "cc": "hk",
+        "hash": 3632958889241005787
+      },
+      "members": {
+        "cn": 1517349382,
+        "default": 1450144092
+      },
+      "variants": {},
+      "label": "群雄时代 - 单机三国战棋策略游戏 ↔ 三國志天下布武 - 單機戰棋策略遊戲"
+    },
+    {
+      "distance": 6,
+      "cn": {
+        "trackId": 807317212,
+        "name": "每日精选-天文地理人文自然之美&摄影",
+        "artist": "北京上下四方文化有限公司",
+        "genre": "图书",
+        "price": "¥6.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/b2/4c/62/b24c62c2-f175-3c70-c332-c01dcc44a638/AppIcon-0-0-1x_U007epad-0-1-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3524291655564585008
+      },
+      "global": {
+        "trackId": 375819093,
+        "name": "Forvo Pronunciation",
+        "artist": "Forvo Media SL",
+        "genre": "Reference",
+        "price": "S$ 3.98",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/d6/cb/43/d6cb43f3-3e21-234c-8fd5-d611de0a0616/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/100x100bb.png",
+        "cc": "sg",
+        "hash": 3526543386390360112
+      },
+      "members": {
+        "cn": 807317212
+      },
+      "variants": {},
+      "label": "每日精选-天文地理人文自然之美&摄影 ↔ Forvo Pronunciation"
+    },
+    {
+      "distance": 5,
+      "cn": {
+        "trackId": 6746705608,
+        "name": "AutoSnore: 鼾声记录器",
+        "artist": "Tantsissa",
+        "genre": "医疗",
+        "price": "¥38.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/b3/f6/95/b3f69583-5d59-be31-99b4-92228ea153b3/AppIcon-0-0-1x_U007ephone-0-1-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 1515262585767266050
+      },
+      "global": {
+        "trackId": 1164801111,
+        "name": "AutoSleep: Watch Sleep Tracker",
+        "artist": "Tantsissa",
+        "genre": "Health & Fitness",
+        "price": "$9.99",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/3b/00/cc/3b00ccbb-dfa7-03f5-744e-93a514fcc58d/AppIcon-0-0-1x_U007ephone-0-1-0-85-220.png/100x100bb.png",
+        "cc": "us",
+        "hash": 3821105577801090823
+      },
+      "members": {
+        "cn": 6746705608
+      },
+      "variants": {},
+      "label": "AutoSnore: 鼾声记录器 ↔ AutoSleep: Watch Sleep Tracker"
+    },
+    {
+      "distance": 5,
+      "cn": {
+        "trackId": 577628510,
+        "name": "TeamSpeak 3",
+        "artist": "TeamSpeak Systems Inc",
+        "genre": "社交",
+        "price": "¥8.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/98/33/e9/9833e9ee-fb56-df24-0ec1-d7eb12308d05/AppIcon-0-0-1x_U007epad-0-1-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 10096823073619513230
+      },
+      "global": {
+        "trackId": 6760838876,
+        "name": "올디 Oldi - Phone Camera",
+        "artist": "Sean Cho",
+        "genre": "사진 및 비디오",
+        "price": "￦1,100",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/cb/fe/50/cbfe502d-4b56-a907-6330-66bf4f616031/AppIcon-0-0-1x_U007ephone-0-0-0-1-0-85-220.png/100x100bb.png",
+        "cc": "kr",
+        "hash": 14703987900233486284
+      },
+      "members": {
+        "cn": 577628510
+      },
+      "variants": {},
+      "label": "TeamSpeak 3 ↔ 올디 Oldi - Phone Camera"
+    },
+    {
+      "distance": 6,
+      "cn": {
+        "trackId": 592331499,
+        "name": "美颜相机",
+        "artist": "Meitu Technology Co., Ltd.",
+        "genre": "摄影与录像",
+        "price": "获取",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/e1/27/80/e1278069-7eb8-f525-ba08-40a2b82ad1af/AppIcon-0-0-1x_U007epad-0-1-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 17980123620024980164
+      },
+      "global": {
+        "trackId": 315795555,
+        "name": "네이버 웹툰 - Naver Webtoon",
+        "artist": "NAVER WEBTOON Ltd.",
+        "genre": "엔터테인먼트",
+        "price": "받기",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/52/3e/5a/523e5a84-faa2-0c18-3369-2d10c2ae769e/AppIcon-0-0-1x_U007epad-0-1-0-85-220.png/100x100bb.png",
+        "cc": "kr",
+        "hash": 17979279195094853348
+      },
+      "members": {
+        "cn": 592331499
+      },
+      "variants": {},
+      "label": "美颜相机 ↔ 네이버 웹툰 - Naver Webtoon"
+    },
+    {
+      "distance": 2,
+      "cn": {
+        "trackId": 388627783,
+        "name": "扫描全能王-手机扫描仪 & PDF图片转文字",
+        "artist": "INTSIG Information Co., Ltd",
+        "genre": "效率",
+        "price": "获取",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/52/aa/58/52aa587a-7f12-f138-1fab-8ed67d74e8c5/AppIconLite-0-0-1x_U007ephone-0-6-0-0-sRGB-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 14705158107467836435
+      },
+      "global": {
+        "trackId": 388624839,
+        "name": "CamScanner+",
+        "artist": "Linguan Data",
+        "genre": "生產力",
+        "price": "HK$ 8.00",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/6e/02/2e/6e022e93-e381-05cc-e4de-84d2754307f8/AppIconPlus-0-0-1x_U007emarketing-0-6-0-0-sRGB-85-220.png/100x100bb.png",
+        "cc": "hk",
+        "hash": 14705158107467834386
+      },
+      "members": {
+        "cn": 388627783,
+        "default": 388624839
+      },
+      "variants": {},
+      "label": "扫描全能王-手机扫描仪 & PDF图片转文字 ↔ CamScanner+"
+    },
+    {
+      "distance": 5,
+      "cn": {
+        "trackId": 6449580241,
+        "name": "Blackmagic Camera",
+        "artist": "Blackmagic Design Inc",
+        "genre": "摄影与录像",
+        "price": "获取",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/fe/44/b7/fe44b79e-1d4a-7534-ae1f-d4be8b68e0eb/AppIcon-0-0-1x_U007epad-0-9-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3705643611423460659
+      },
+      "global": {
+        "trackId": 6779939767,
+        "name": "Runa: RPG Maker & VN Player",
+        "artist": "Pham Tran Thai Bao",
+        "genre": "유틸리티",
+        "price": "￦4,400",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/04/2f/1e/042f1e73-df91-1c25-17bd-ce28fb20a293/AppIcon-0-0-1x_U007emarketing-0-11-0-85-220.png/100x100bb.png",
+        "cc": "kr",
+        "hash": 3696636343314959667
+      },
+      "members": {
+        "cn": 6449580241
+      },
+      "variants": {},
+      "label": "Blackmagic Camera ↔ Runa: RPG Maker & VN Player"
+    },
+    {
+      "distance": 3,
+      "cn": {
+        "trackId": 1477031443,
+        "name": "抖音极速版",
+        "artist": "Beijing Douyin Technology Co., Ltd.",
+        "genre": "娱乐",
+        "price": "获取",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/26/74/38/26743801-8f4a-4964-f0bf-6406de73e7cc/AppIcon_Lite-0-0-1x_U007emarketing-0-0-0-7-0-0-85-220.png/100x100bb.png",
+        "cc": "cn",
+        "hash": 3253541867398929624
+      },
+      "global": {
+        "trackId": 1142110895,
+        "name": "抖音 Douyin",
+        "artist": "Beijing Douyin Technology Co., Ltd.",
+        "genre": "娛樂",
+        "price": "取得",
+        "art": "https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/17/e6/90/17e690fe-f519-2fb8-5128-37a11d12c54b/AppIcon-0-0-1x_U007emarketing-0-0-0-7-0-0-85-220.png/100x100bb.png",
+        "cc": "hk",
+        "hash": 3253541867398995418
+      },
+      "members": {
+        "cn": 1477031443
+      },
+      "variants": {},
+      "label": "抖音极速版 ↔ 抖音 Douyin"
+    }
+  ]
+}
