@@ -147,8 +147,9 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.15 | 21 | `FGame-v1.0.15-b21-unsigned.ipa` | 搜索框缩进「应用」标题右侧、三板块切换条上移到标题下方（第 24 行） |
 | 1.0.16 | 22 | `FGame-v1.0.16-b22-unsigned.ipa` | 区服改分类行右侧小下拉、搜索结果与关注条目点进站内详情（`StoreDetail`）、搜索回车自动收键盘、APP 页分类行极简为「本体｜内购｜降价｜关注」、分类行与下拉垂直对齐（第 25–27 行） |
 | 1.0.17 | 23 | `FGame-v1.0.17-b23-unsigned.ipa` | 限免日报去掉右上角刷新/更多、详情页 App Store 化（获取 + 关注双胶囊、可点开发者进开发者页、用户评价 + 逐条翻译）、排行榜详情删底部说明与按钮、四页标题排版统一（第 28–29 行） |
+| 1.0.18 | 24 | —（尚未出包） | 外区付费榜价格后补人民币参考价：服务端新增 `fxRates`（1 CNY 兑各币种，12 小时缓存，exchangerate-api → frankfurter → 内置静态表三级兜底），榜单行与榜单详情价格行显示「≈¥」，国区与免费榜不显示 |
 
-同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.16 (22)` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
+同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.18 (24)` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 
 ---
 

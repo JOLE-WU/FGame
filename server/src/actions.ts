@@ -4830,6 +4830,82 @@ type RankingAppOut = {
 };
 const appRankingCache = new Map<string, { at: number; apps: RankingAppOut[] }>();
 
+// 外区付费榜的价格是当地货币字符串（$4.99 / HK$38.00 / ¥600），前端要补一个
+// 「≈¥」参考价。汇率统一由服务端取，避免各家客户端算法/数据源不一致：
+// 1 CNY = rates[X]，主源 exchangerate-api 免费接口（覆盖含 TWD/MOP 的 160+ 币种），
+// 失败回落 frankfurter，再失败用内置静态表，静态表只缓存 30 分钟以便尽早重试。
+const FX_TTL_MS = 12 * 60 * 60_000;
+const FX_STATIC_TTL_MS = 30 * 60_000;
+const FX_STATIC_PER_CNY: Record<string, number> = {
+  CNY: 1, USD: 0.1408, HKD: 1.176, JPY: 23.98, INR: 14.13, GBP: 0.1133,
+  KRW: 200.4, SGD: 0.1931, TWD: 4.46, AUD: 0.2206, EUR: 0.1356, CAD: 0.2137, MOP: 1.211,
+};
+type FxSnapshot = { at: number; rates: Record<string, number>; source: string };
+let fxCache: FxSnapshot | null = null;
+let fxInflight: Promise<FxSnapshot> | null = null;
+const FX_SYMBOLS = [
+  "CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD",
+  "AUD", "EUR", "CAD", "MOP", "MYR", "THB", "IDR", "PHP", "VND", "RUB", "BRL",
+];
+
+function sanitizeRates(input: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (!input || typeof input !== "object") return out;
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    const n = typeof value === "number" ? value : Number(value);
+    if (key.length >= 2 && key.length <= 4 && Number.isFinite(n) && n > 0) out[key.toUpperCase()] = n;
+  }
+  return out;
+}
+
+async function loadFxRates(): Promise<FxSnapshot> {
+  try {
+    const res = await fetch("https://open.er-api.com/v6/latest/CNY", { signal: AbortSignal.timeout(8_000) });
+    if (res.ok) {
+      const body = (await res.json()) as { result?: string; rates?: unknown };
+      const rates = sanitizeRates(body.rates);
+      if (body.result === "success" && Object.keys(rates).length > 20) {
+        rates.CNY = 1;
+        return { at: Date.now(), rates, source: "exchangerate-api" };
+      }
+    }
+  } catch {
+    // 落到下一个源
+  }
+  try {
+    const res = await fetch("https://api.frankfurter.dev/v1/latest?base=CNY", { signal: AbortSignal.timeout(8_000) });
+    if (res.ok) {
+      const body = (await res.json()) as { rates?: unknown };
+      const rates = sanitizeRates(body.rates);
+      if (Object.keys(rates).length > 5) {
+        // frankfurter 没有 TWD/MOP 等，用静态表补齐。
+        return { at: Date.now(), rates: { ...FX_STATIC_PER_CNY, ...rates, CNY: 1 }, source: "frankfurter" };
+      }
+    }
+  } catch {
+    // 落到静态表
+  }
+  return { at: Date.now() - FX_TTL_MS + FX_STATIC_TTL_MS, rates: { ...FX_STATIC_PER_CNY }, source: "static" };
+}
+
+/** 取一份仍新鲜的汇率快照；同一时刻只允许一次外网请求。 */
+async function currentFx(): Promise<FxSnapshot> {
+  if (!fxCache || Date.now() - fxCache.at >= FX_TTL_MS) {
+    if (!fxInflight) {
+      fxInflight = loadFxRates()
+        .then((snap) => {
+          fxCache = snap;
+          return snap;
+        })
+        .finally(() => {
+          fxInflight = null;
+        });
+    }
+    await fxInflight;
+  }
+  return fxCache ?? { at: Date.now(), rates: { ...FX_STATIC_PER_CNY }, source: "static" };
+}
+
 // Apple Arcade 没有公开清单 API：官方 apps.apple.com/arcade 在国区会被
 // 重定向到 Today，iTunes 元数据也不带 arcade 标记。改为聚合 Apple 官方
 // Search API 的 Arcade 相关检索，再用「无独立售价」筛出只能订阅获取的
@@ -6166,6 +6242,31 @@ export const Actions = {
         for (const k of [...appRankingCache.keys()].slice(0, 40)) appRankingCache.delete(k);
       }
       return { country, kind, chart, genre, apps, ok: true };
+    },
+  }),
+
+  fxRates: defineAction({
+    description:
+      "Returns CNY reference exchange rates (1 CNY = rates[X]) used to show an approximate RMB price next to foreign App Store chart prices. 12-hour server cache with multi-source fallback (exchangerate-api → frankfurter → built-in static table).",
+    request: z.object({
+      symbols: z.array(z.string().trim().min(2).max(4)).max(30).optional(),
+    }),
+    response: z.object({
+      base: z.literal("CNY"),
+      rates: z.record(z.string(), z.number()),
+      at: z.number(),
+      source: z.string(),
+    }),
+    async handler(_ctx, args) {
+      const snap = await currentFx();
+      const wanted = (args.symbols ?? []).map((s) => s.toUpperCase()).filter(Boolean);
+      const codes = wanted.length ? wanted : FX_SYMBOLS;
+      const rates: Record<string, number> = {};
+      for (const code of codes) {
+        const v = snap.rates[code] ?? FX_STATIC_PER_CNY[code];
+        if (typeof v === "number" && Number.isFinite(v) && v > 0) rates[code] = v;
+      }
+      return { base: "CNY" as const, rates, at: snap.at, source: snap.source };
     },
   }),
 

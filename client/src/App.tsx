@@ -256,6 +256,48 @@ function priceText(cents: number, currency: string): string {
   return currency === "USD" ? `$${(cents / 100).toFixed(2)}` : `${(cents / 100).toFixed(2)} ${currency}`;
 }
 
+/**
+ * 外区榜单价格补一个人民币参考价。`rate` 是「1 CNY 兑多少该币种」，
+ * 所以人民币 = 原价 / rate。数据取不到就返回 null（前端直接不显示）。
+ */
+function cnyApprox(priceLabel: string, rate: number | undefined): string | null {
+  if (!rate || !Number.isFinite(rate) || rate <= 0) return null;
+  const amount = Number(String(priceLabel ?? "").replace(/[^\d.]/g, ""));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const cny = amount / rate;
+  if (!Number.isFinite(cny) || cny <= 0) return null;
+  if (cny >= 100) return `≈¥${Math.round(cny)}`;
+  return `≈¥${cny.toFixed(1)}`;
+}
+
+/** 付费榜 + 外区才需要人民币换算；国区本身就是 ¥。 */
+function needsCnyPrice(cc: string, chart: string): boolean {
+  return chart === "paid" && cc !== "cn";
+}
+
+/** 接口偶尔给空 currency，用区服兜底，避免整行换算消失。 */
+const CC_CURRENCY: Record<string, string> = {
+  cn: "CNY", us: "USD", jp: "JPY", hk: "HKD", in: "INR",
+  tw: "TWD", gb: "GBP", kr: "KRW", sg: "SGD", au: "AUD",
+};
+
+function rateFor(rates: Record<string, number> | null | undefined, currency: string, cc: string): number | undefined {
+  if (!rates) return undefined;
+  const code = (currency || CC_CURRENCY[cc] || "").toUpperCase();
+  return code ? rates[code] : undefined;
+}
+
+/** 榜单/详情共用的汇率查询，同一 queryKey 只打一次后端。 */
+function useCnyRates(enabled: boolean) {
+  const query = useQuery({
+    queryKey: ["fxRates"],
+    queryFn: () => api.fxRates({ symbols: ["CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD", "AUD", "EUR", "CAD", "MOP"] }),
+    staleTime: 6 * 60 * 60_000,
+    enabled,
+  });
+  return query.data?.rates ?? null;
+}
+
 function countdown(endAt: string | null, now: number): { text: string; urgent: boolean } | null {
   if (!endAt) return null;
   const diff = new Date(endAt).getTime() - now;
@@ -2420,6 +2462,9 @@ function RankingDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const dev = useAppStoreDeveloper(app.trackId, meta.cc);
+  const showCny = needsCnyPrice(meta.cc, meta.chartLabel === "付费榜" ? "paid" : "free");
+  const rates = useCnyRates(showCny);
+  const cny = showCny ? cnyApprox(app.price, rateFor(rates, app.currency, meta.cc)) : null;
 
   const release = app.releaseDate ? String(app.releaseDate).slice(0, 10) : "";
   const rows: [string, string][] = [
@@ -2427,7 +2472,7 @@ function RankingDetail({
     ["区服", `${meta.regionLabel} · ${meta.cc.toUpperCase()}`],
     ["榜单", `${meta.chartLabel} · ${meta.boardLabel}`],
     ["类别", app.genre || "—"],
-    ["价格", app.price || "免费"],
+    ["价格", cny ? `${app.price || "免费"}（${cny}）` : app.price || "免费"],
   ];
   if (release) rows.push(["上架日期", release]);
 
@@ -2604,7 +2649,7 @@ function ArcadeDetail({
   );
 }
 
-function RankRow({ app, onOpen }: { app: RankingApp; onOpen?: (app: RankingApp) => void }) {
+function RankRow({ app, cny, onOpen }: { app: RankingApp; cny?: string | null; onOpen?: (app: RankingApp) => void }) {
   const inner = (
     <>
       <span className="w-6 flex-none text-center font-mono text-[13px] font-black text-[var(--dim2)]">{app.rank}</span>
@@ -2618,7 +2663,14 @@ function RankRow({ app, onOpen }: { app: RankingApp; onOpen?: (app: RankingApp) 
         <div className="mt-0.5 truncate text-[10px] text-[var(--dim)]">{[app.sellerName, app.genre].filter(Boolean).join(" · ")}</div>
       </div>
       <div className="flex-none text-right">
-        <div className="text-[11px] font-bold text-[var(--accent)]">{app.price || "免费"}</div>
+        <div className="flex items-baseline justify-end gap-2 whitespace-nowrap">
+          <span className="text-[11px] font-bold text-[var(--accent)]">{app.price || "免费"}</span>
+          {cny ? (
+            <span data-cny-price title="按当日汇率折算，仅供参考" className="font-mono text-[9px] font-semibold text-[var(--dim2)]">
+              {cny}
+            </span>
+          ) : null}
+        </div>
         <div className="font-mono text-[9px] text-[var(--dim2)]">{onOpen ? "详情 →" : "商店 ↗"}</div>
       </div>
     </>
@@ -2658,6 +2710,8 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
     staleTime: 10 * 60_000,
   });
   const apps = query.data?.apps ?? [];
+  const showCny = needsCnyPrice(cc, chart);
+  const rates = useCnyRates(showCny);
   const meta: RankingMeta = {
     cc,
     regionLabel,
@@ -2694,8 +2748,16 @@ function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen
         <EmptyNote title="这个组合暂时没有数据" sub="换个区服、免费/付费，或换一个游戏种类看看。" />
       ) : (
         <div className="mt-3 flex flex-col gap-[9px]">
+          {showCny ? (
+            <p className="text-right font-mono text-[9px] text-[var(--dim)]">≈¥ 为人民币参考价</p>
+          ) : null}
           {apps.map((a) => (
-            <RankRow key={`${a.trackId}-${a.rank}`} app={a} onOpen={onOpen ? (x) => onOpen(x, meta) : undefined} />
+            <RankRow
+              key={`${a.trackId}-${a.rank}`}
+              app={a}
+              cny={showCny ? cnyApprox(a.price, rateFor(rates, a.currency, cc)) : null}
+              onOpen={onOpen ? (x) => onOpen(x, meta) : undefined}
+            />
           ))}
         </div>
       )}
