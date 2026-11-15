@@ -3249,12 +3249,14 @@ function RankingBoard({
         kind,
         chart,
         genre: kind === "games" ? genre : undefined,
-        limit: 50,
+        // Apple 的 RSS 榜单接口上限就是 100 条（limit=200 也只回 100），
+        // 再往上要多页拼历史快照，这里取满 100，搜索的覆盖面跟着变成前 100。
+        limit: 100,
       }),
     staleTime: 10 * 60_000,
   });
   const apps = query.data?.apps ?? [];
-  // 排行榜只有 50 条，搜索直接在本地筛：名称和开发者都命中的才算。
+  // 榜内搜索直接在本地筛这 100 条：名称和开发者都命中的才算。
   const term = (search ?? "").trim().toLowerCase();
   const shown = term
     ? apps.filter((a) => a.name.toLowerCase().includes(term) || (a.sellerName ?? "").toLowerCase().includes(term))
@@ -3303,7 +3305,7 @@ function RankingBoard({
           {shown.length === 0 ? (
             <EmptyNote
               title="这一榜里没有匹配"
-              sub={`「${(search ?? "").trim()}」不在当前榜的前 50 名里，换区服或切换免费/付费榜再看看。`}
+              sub={`「${(search ?? "").trim()}」不在${regionLabel}这个榜的前 100 名里。换区服或切免费/付费试试；要搜全库请到「限免情报」页的搜索框。`}
             />
           ) : (
             shown.map((a) => (
