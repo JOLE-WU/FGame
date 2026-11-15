@@ -48,6 +48,8 @@
 
 | 25 | **搜索回车自动收键盘 + APP 页分类行极简化** | 反馈「点键盘确认后键盘不收起，挡住搜索结果」和「红框里的东西都不要，四个板块做成 本体｜内购｜降价｜关注，02/03/04 标题和说明文字也别要」。① 搜索框加 `enterKeyHint="search"` + `onKeyDown`：Enter 且非输入法合成态时 `preventDefault()` 后 `blur()`，WKWebView 立刻收键盘（`isComposing` 时保留，避免中文选字被吞）。实测回车后 `document.activeElement` 从 INPUT 变 BODY。② APP 页去掉整块：`01 / 限免情报` 板块页头、带计数的四格卡片、区服筛选行、每类底下的说明长文案，以及 `02 本体限免 / 03 内购限免 / 04 降价`、关注页四个子标题，统统一行 `本体｜内购｜降价｜关注` 纯文字切换（当前项加 2px 主色下划线，无底色、无计数）。列表直接接在切换行下方。③ 连带清理：`countFree / countIap / countDrop`、`changeRegion` 与相关空态文案里的「切区服」说法；区服不再在界面切换，沿用本设备上次选择（默认国区）。搜索结果的 `00 / App Store 全库` 顺延为 `01`。 |
 
+| 26 | **区服改小下拉 + 搜索结果点进站内详情** | 反馈「按你说的做个下拉切换」「搜索出来的应用游戏点进去也是详情页，现在直接跳转」。① 分类行右侧加一个小胶囊区服下拉（`data-region-select`，原生 `select` + `appearance-none` + 自绘 chevron，11px 字、`ml-auto` 靠右），切换写入 `localStorage.fgame-ios-region`，只影响「本体限免」的筛选口径与全库搜索 storefront；上一版删掉的 `changeRegion` 恢复。② `StoreRow` 新增 `onOpen`：搜索结果与「关注」页里的全库条目点整行进新的 `StoreDetail`（`data-store-detail`），含图标 / 价格 / 类别 / 开发者 / 评分 / 区服、`AppStoreProfile`（官方截图 + 详细介绍 + 中文翻译）与底部「加关注 / 在 App Store 打开」，不再整行直接跳 store。③ 外层用 `div[role=button]` 而不是 `<button>`，避免与卡片内 ☆ 按钮形成非法嵌套；☆ 的 `stopPropagation` 保证点星只关注、不打开详情。实测：「国区」下拉可切到美区/全部区服并落盘；搜索 19 条结果全部可点入，URL 不变、无 popup；点 ☆ 后 `data-store-detail` 计数仍为 0；关注页条目同样可点入；浅/深两套主题控制台零报错。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 

@@ -2056,19 +2056,174 @@ function DropDetail({
 }
 
 /**
+ * 全库搜索结果详情：在站内先看图标、价格、评分与 App Store 官方介绍
+ * （截图 + 详细介绍 + 中文翻译），再点底部按钮去商店下载。搜索出来的
+ * 应用和游戏都走这一个详情层，不再整行直接跳转 store。
+ */
+function StoreDetail({
+  app,
+  country,
+  watched,
+  onToggleWatch,
+  onClose,
+}: {
+  app: StoreApp;
+  country: string;
+  watched: boolean;
+  onToggleWatch: () => void;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const rows: [string, string][] = [
+    ["当前价格", app.price === 0 ? "免费" : app.formattedPrice],
+    ["类别", app.genre || "—"],
+    ["开发者", app.sellerName || "—"],
+  ];
+  if (app.rating != null && app.rating > 0) {
+    const count = app.ratingCount ? ` · ${app.ratingCount} 个评分` : "";
+    rows.push(["评分", `★ ${app.rating.toFixed(1)}${count}`]);
+  }
+  rows.push(["区服", IOS_REGION_LABEL[country] ?? country.toUpperCase()]);
+
+  return createPortal(
+    <div
+      className="v-scroll-only fixed inset-0 z-40"
+      role="dialog"
+      aria-modal="true"
+      aria-label={`应用详情：${app.name}`}
+      data-store-detail
+      {...swipe.handlers}
+      style={swipe.style}
+    >
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="返回搜索结果"
+            className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]"
+          >
+            ← 返回
+          </button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">
+            APP STORE · SEARCH
+          </span>
+        </div>
+      </div>
+
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-28 pt-6">
+        <div className="flex items-center gap-4">
+          {app.iconUrl ? (
+            <img
+              src={app.iconUrl}
+              alt=""
+              className="h-[92px] w-[92px] flex-none rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] object-cover"
+            />
+          ) : (
+            <div className="grid h-[92px] w-[92px] flex-none place-items-center rounded-[22px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-3xl font-black text-[var(--dim2)]">
+              {(app.name.trim()[0] ?? "A").toUpperCase()}
+            </div>
+          )}
+          <div className="min-w-0">
+            {app.tag ? (
+              <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--accent)]">
+                {app.tag === "内购限免" ? "IN-APP FREE" : app.tag === "降价" ? "PRICE DROP" : "APP FREE"}
+              </div>
+            ) : (
+              <div className="font-mono text-[10px] font-semibold tracking-[0.12em] text-[var(--dim2)]">APP STORE</div>
+            )}
+            <h1 className="mt-1 font-serif text-[22px] font-black leading-[1.25] text-[var(--text)]">{app.name}</h1>
+            <div className="mt-1.5 flex items-baseline gap-2">
+              <b className={`text-[17px] font-bold ${app.price === 0 ? "text-[var(--free-ink)]" : "text-[var(--text)]"}`}>
+                {app.price === 0 ? "免费" : app.formattedPrice}
+              </b>
+              {app.tag ? (
+                <span
+                  className={`flex-none rounded-full px-1.5 py-[2px] text-[9px] font-bold leading-none ${
+                    app.tag === "内购限免"
+                      ? "bg-[var(--iap-bg)] text-[var(--iap-ink)]"
+                      : app.tag === "降价"
+                        ? "bg-[var(--warn-bg)] text-[var(--warn)]"
+                        : "bg-[var(--free-bg)] text-[var(--free-ink)]"
+                  }`}
+                >
+                  {app.tag}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+
+        <dl className="mt-6 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-[13px] shadow-[var(--glass-hi)]">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex justify-between gap-4">
+              <dt className="shrink-0 text-[var(--dim)]">{k}</dt>
+              <dd className="text-right font-medium text-[var(--text)]">{v}</dd>
+            </div>
+          ))}
+        </dl>
+
+        <AppStoreProfile trackId={app.trackId} country={country} fallbackImages={app.iconUrl ? [app.iconUrl] : undefined} />
+      </div>
+
+      <div className="fixed inset-x-0 bottom-0 z-10 border-t border-[var(--border)] bg-[var(--chrome-bg-strong)] px-4 pb-[max(10px,env(safe-area-inset-bottom))] pt-2.5">
+        <div className="mx-auto flex w-full max-w-3xl gap-2">
+          <button
+            type="button"
+            aria-label={watched ? `取消关注 ${app.name}` : `关注 ${app.name}`}
+            aria-pressed={watched}
+            onClick={onToggleWatch}
+            className={`flex h-11 flex-1 items-center justify-center gap-1.5 rounded-[12px] border text-[13px] font-bold transition-colors ${
+              watched
+                ? "border-transparent bg-grad text-[var(--accent-ink)]"
+                : "border-[var(--border)] bg-[var(--surface)] text-[var(--text)]"
+            }`}
+          >
+            {watched ? "★ 已关注" : "☆ 加关注"}
+          </button>
+          {app.storeUrl ? (
+            <a
+              href={app.storeUrl}
+              target="_blank"
+              rel="noreferrer"
+              aria-label={`在 App Store 打开 ${app.name}`}
+              className="flex h-11 flex-[1.4] items-center justify-center rounded-[12px] bg-grad text-[13px] font-bold text-[var(--accent-ink)]"
+            >
+              在 App Store 打开 ↗
+            </a>
+          ) : null}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
  * A result from the WHOLE App Store catalogue (not a collected deal). Tapping
- * always opens the official store listing — these apps are here to be found,
- * not to be claimed. A badge marks ones this site also tracks, so the user
- * knows to scroll down for the free/drop detail card.
+ * opens the in-app detail sheet (intro / screenshots / price) instead of
+ * jumping straight to the store — the store button lives inside that sheet.
+ * 未传 onOpen 时退回原来的「整行商店链接」行为。
  */
 function StoreRow({
   app,
   watched,
   onToggleWatch,
+  onOpen,
 }: {
   app: StoreApp;
   watched?: boolean;
   onToggleWatch?: (app: StoreApp) => void;
+  onOpen?: (app: StoreApp) => void;
 }) {
   const cls =
     "flex w-full items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] text-left shadow-[var(--glass-hi)] backdrop-blur-md";
@@ -2119,9 +2274,9 @@ function StoreRow({
           ) : null}
         </div>
       </div>
-      {onToggleWatch ? null : (
+      {onOpen || !onToggleWatch ? (
         <span aria-hidden="true" className="flex-none font-mono text-sm text-[var(--dim2)]">→</span>
-      )}
+      ) : null}
       {onToggleWatch ? (
         <button
           type="button"
@@ -2145,6 +2300,27 @@ function StoreRow({
       ) : null}
     </>
   );
+  if (onOpen) {
+    // 用 div[role=button] 而不是 <button>：卡片里还有 ☆ 关注按钮，
+    // 按钮嵌套按钮是非法结构，部分浏览器会把内层点击当成外层提交。
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={`查看 ${app.name} 详情`}
+        className={`${cls} cursor-pointer`}
+        onClick={() => onOpen(app)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onOpen(app);
+          }
+        }}
+      >
+        {inner}
+      </div>
+    );
+  }
   if (app.storeUrl) {
     return (
       <a href={app.storeUrl} target="_blank" rel="noreferrer" aria-label={`在 App Store 打开 ${app.name}`} className={cls}>
@@ -3277,6 +3453,7 @@ function AppsPage({
   const [detailArcade, setDetailArcade] = useState<ArcadeGame | null>(null);
   // 降价条目也先落在应用内详情页（价格曲线 + 官方资料），再由用户决定去商店。
   const [detailDrop, setDetailDrop] = useState<AppPrice | null>(null);
+  const [detailStore, setDetailStore] = useState<StoreApp | null>(null);
   const queryClient = useQueryClient();
   // 关注直接复用详情页那颗「收藏」（同一张 marks 表），所以两边状态天然一致。
   const toggleSave = useMutation({
@@ -3341,15 +3518,19 @@ function AppsPage({
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
   const deferredSearch = useDeferredValue(search);
-  // 区服不再在界面上切换：沿用本设备上次选择（默认国区），只影响
-  // 「本体限免」的筛选口径与全库搜索的 storefront。
-  const [region] = useState<string>(() => {
+  // 区服在分类行右侧的小下拉里切换（默认国区），只影响「本体限免」的
+  // 筛选口径与全库搜索的 storefront。
+  const [region, setRegion] = useState<string>(() => {
     try {
       const saved = localStorage.getItem("fgame-ios-region");
       if (saved && IOS_REGION_TABS.some((t) => t.code === saved)) return saved;
     } catch { /* ignore */ }
     return "cn";
   });
+  const changeRegion = (code: string) => {
+    setRegion(code);
+    try { localStorage.setItem("fgame-ios-region", code); } catch { /* ignore */ }
+  };
   const pricesQuery = useQuery({ queryKey: ["appPrices"], queryFn: () => api.listAppPrices({}) });
 
   const q = deferredSearch.trim().toLowerCase();
@@ -3492,6 +3673,15 @@ function AppsPage({
           onClose={() => setDetailDrop(null)}
         />
       ) : null}
+      {detailStore ? (
+        <StoreDetail
+          app={detailStore}
+          country={storeCountry}
+          watched={storeWatchIds.has(detailStore.trackId)}
+          onToggleWatch={() => toggleStoreWatch(detailStore)}
+          onClose={() => setDetailStore(null)}
+        />
+      ) : null}
       {detailArcade ? (
         <ArcadeDetail
           game={detailArcade}
@@ -3574,6 +3764,32 @@ function AppsPage({
             </button>
           </Fragment>
         ))}
+        {/* 区服只留一个很小的下拉，别把刚精简掉的整条筛选行搬回来。 */}
+        <label className="relative ml-auto flex flex-none items-center" data-region-select>
+          <span className="sr-only">App Store 区服</span>
+          <select
+            aria-label="App Store 区服"
+            value={region}
+            onChange={(e) => changeRegion(e.target.value)}
+            className="appearance-none rounded-full border border-[var(--border)] bg-[var(--surface2)] py-[4px] pl-2.5 pr-[19px] text-[11px] font-semibold leading-none text-[var(--dim)] outline-none focus:border-[var(--accent)]"
+          >
+            {IOS_REGION_TABS.map((t) => (
+              <option key={t.code} value={t.code}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          {/* 原生 select 的自带小箭头会被 appearance-none 干掉，自绘一个
+              细 chevron，比文字 ▾ 在小字号下清楚。 */}
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 10 6"
+            fill="none"
+            className="pointer-events-none absolute right-[7px] h-[4px] w-[7px] text-[var(--dim2)]"
+          >
+            <path d="M1 1l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </label>
       </div>
 
       {q.length >= 2 ? (
@@ -3592,6 +3808,7 @@ function AppsPage({
                     app={a}
                     watched={storeWatchIds.has(a.trackId)}
                     onToggleWatch={toggleStoreWatch}
+                    onOpen={(x) => setDetailStore(x)}
                   />
                 ))}
               </div>
@@ -3735,7 +3952,13 @@ function AppsPage({
               <>
                 <div className="flex flex-col gap-[9px]">
                   {watchStore.map((a) => (
-                    <StoreRow key={a.trackId} app={a} watched onToggleWatch={toggleStoreWatch} />
+                    <StoreRow
+                      key={a.trackId}
+                      app={a}
+                      watched
+                      onToggleWatch={toggleStoreWatch}
+                      onOpen={(x) => setDetailStore(x)}
+                    />
                   ))}
                 </div>
               </>
