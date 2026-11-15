@@ -2715,22 +2715,11 @@ function RegionPriceCompare({
   const notListed = missing.filter((r) => !r.localName);
   // 免费（含内购）的本地版没有可比价，0 元不参与「最低」；其余含本地发行版一起排。
   const cheapest = withPrice.find((r) => r.cny != null && r.cny > 0) ?? null;
-  const current = rows.find((r) => r.cc === currentCc) ?? null;
-  const saving = cheapest && current?.cny && cheapest.cny != null ? 1 - cheapest.cny / current.cny : 0;
-  // 同款在别的区是免费+内购（海外发行方换了商业模式）时，和买断价不是一套口径，
-  // 不能只说「当前区最便宜」就完事。
-  const freeLocal = withPrice.filter((r) => r.cny === 0 && r.match !== "same");
-  const freeLocalHint = freeLocal.length
-    ? `另有 ${freeLocal.length} 个区的同款是免费下载 + 内购版本（${freeLocal
-        .slice(0, 2)
-        .map((r) => PRICE_REGION_LABEL[r.cc] ?? r.cc.toUpperCase())
-        .join("、")}${freeLocal.length > 2 ? " 等" : ""}），与买断价不是一套口径，不计入最低价。`
-    : "";
 
   return (
     <section className="mt-6" data-region-prices data-price-view={priceView}>
       <div className="mb-2 flex items-center gap-2">
-        <h2 className="flex-none text-[13px] font-bold text-[var(--text)]">各区价格对比</h2>
+        <h2 className="flex-none text-[13px] font-bold leading-none text-[var(--text)]">各区价格对比</h2>
         {/* 口径切换：本体价 / 内购起价，位置就在标题右侧这块空白。 */}
         <div
           role="tablist"
@@ -2757,9 +2746,6 @@ function RegionPriceCompare({
             </button>
           ))}
         </div>
-        <span className="w-[78px] flex-none text-right font-mono text-[9px] leading-[1.25] text-[var(--dim2)]">
-          {priceView === "base" ? "按人民币折算排序" : "按内购起价排序"}
-        </span>
       </div>
       {priceView === "iap" ? (
         withPrice.length ? (
@@ -2779,24 +2765,6 @@ function RegionPriceCompare({
         </p>
       ) : (
         <>
-          <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim)]">
-            {withPrice.length === 0
-              ? "这 14 个区服都没上架这款 App，暂时无法比较。"
-              : cheapest?.cny == null
-                ? "暂未取到汇率，暂时无法比较"
-                : current?.cny === 0
-                  ? `当前区免费（含内购），和买断价不是一套口径；最便宜的付费区是${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}）。`
-                  : current?.cny && cheapest.cc !== current.cc
-                    ? `最低在${PRICE_REGION_LABEL[cheapest.cc] ?? cheapest.cc.toUpperCase()}（${displayPrice(cheapest.formattedPrice, cheapest.currency)} ≈ ¥${cnyAmount(cheapest.cny)}），比当前区便宜约 ${Math.round(saving * 100)}%。换算按当日汇率，仅供参考。`
-                    : withPrice.length === 1
-                      ? `目前只有${PRICE_REGION_LABEL[currentCc] ?? currentCc.toUpperCase()}上架，其余区服未上架。`
-                      : `当前区已经是这 ${withPrice.length} 个有货区里最便宜的。换算按当日汇率，仅供参考。`}
-          </p>
-          {freeLocalHint ? (
-            <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim2)]" data-region-free-local>
-              {freeLocalHint}
-            </p>
-          ) : null}
           <div className="overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
             {withPrice.map((r, i) => {
               const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;
@@ -2924,9 +2892,6 @@ function IapPriceCompare({
   const unreadable = enriched.filter((x) => !x.iap?.available);
   return (
     <div data-iap-prices>
-      <p className="mb-2 text-[10px] leading-relaxed text-[var(--dim)]">
-        内购取该区公示的最低一档，已折成人民币（Apple 每区最多列 10 项）。
-      </p>
       {query.isPending ? (
         <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-5 text-center text-[12px] text-[var(--dim)]">
           正在读取各区内购…
