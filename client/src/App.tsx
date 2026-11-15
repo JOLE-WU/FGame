@@ -2616,7 +2616,7 @@ function RankRow({ app, onOpen }: { app: RankingApp; onOpen?: (app: RankingApp) 
   );
 }
 
-function RankingBoard({ initialRegion, tabs, onOpen }: { initialRegion: string; tabs?: ReactNode; onOpen?: (app: RankingApp, meta: RankingMeta) => void }) {
+function RankingBoard({ initialRegion, onOpen }: { initialRegion: string; onOpen?: (app: RankingApp, meta: RankingMeta) => void }) {
   const [cc, setCc] = useState(() => (initialRegion === "all" ? "cn" : initialRegion));
   const [kind, setKind] = useState<"apps" | "games">("apps");
   const [chart, setChart] = useState<"free" | "paid">("free");
@@ -2643,13 +2643,12 @@ function RankingBoard({ initialRegion, tabs, onOpen }: { initialRegion: string; 
     chartLabel: chart === "free" ? "免费榜" : "付费榜",
   };
   return (
-    <div className="mt-5 pb-2" data-board="ranking">
+    <div className="mt-4 pb-2" data-board="ranking">
       <SectionHead
         no="01"
         title={`${regionLabel} · ${kind === "games" ? genreLabel : "App 总榜"}`}
         en={`TOP ${chart === "free" ? "FREE" : "PAID"} · ${cc.toUpperCase()}`}
       />
-      {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
         Apple 官方 App Store 榜单 · 每 10 分钟更新 · 点条目看详情，详情页内可去商店或加关注
       </p>
@@ -2725,7 +2724,7 @@ function ArcadeRow({ game, onOpen }: { game: ArcadeGame; onOpen?: (g: ArcadeGame
   );
 }
 
-function ArcadeBoard({ tabs, onOpen }: { tabs?: ReactNode; onOpen?: (g: ArcadeGame) => void }) {
+function ArcadeBoard({ onOpen }: { onOpen?: (g: ArcadeGame) => void }) {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState("all");
   const query = useQuery({
@@ -2743,9 +2742,8 @@ function ArcadeBoard({ tabs, onOpen }: { tabs?: ReactNode; onOpen?: (g: ArcadeGa
     );
   }, [games, kind, q]);
   return (
-    <div className="mt-5 pb-2" data-board="arcade">
+    <div className="mt-4 pb-2" data-board="arcade">
       <SectionHead no="01" title="Apple Arcade 游戏清单" en={`ARCADE · ${query.data?.total ?? 0} GAMES`} />
-      {tabs ?? null}
       <p className="mt-1 font-mono text-[9px] leading-[1.5] text-[var(--dim2)]">
         国区 App Store 未上线 Apple Arcade，清单按美区整理；需订阅后下载，游戏内无广告与内购 · 点条目看详情，详情页内可去商店或加关注。
       </p>
@@ -3515,18 +3513,42 @@ function AppsPage({
           onClose={() => setDetailArcade(null)}
         />
       ) : null}
-      <div className="flex items-baseline gap-2 pb-1 pt-4">
+      <div className="flex min-h-[32px] items-center gap-2 pb-1 pt-4">
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">应用</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">iOS APPS</span>
+        {/* 搜索框缩成标题行右侧的小胶囊：它只筛「限免情报」里的条目与
+            App Store 全库结果，放到页头后不占正文一行；排行榜 / Arcade
+            各有自己的筛选，切过去时不显示，免得以为能在这里搜。 */}
+        {subTab === "free" ? (
+          <div className="relative ml-auto w-[45%] max-w-[186px] flex-none">
+            <input
+              ref={searchRef}
+              aria-label="搜索应用"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="搜索应用 / 全库"
+              className="w-full rounded-full border border-[var(--border)] bg-[var(--surface2)] py-[7px] pl-3 pr-8 text-[11.5px] leading-none text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
+            />
+            {search ? (
+              <SearchClearButton
+                onClear={() => {
+                  setSearch("");
+                  searchRef.current?.focus();
+                }}
+              />
+            ) : null}
+          </div>
+        ) : null}
       </div>
+      {/* 三个板块切换条紧贴「应用」标题，正文里的「01 / xxx」再往下排。 */}
+      <div className="mt-3">{subTabsRow}</div>
       {subTab === "ranking" ? (
-        <RankingBoard initialRegion={region} tabs={subTabsRow} onOpen={(app, meta) => setDetailRank({ app, meta })} />
+        <RankingBoard initialRegion={region} onOpen={(app, meta) => setDetailRank({ app, meta })} />
       ) : subTab === "arcade" ? (
-        <ArcadeBoard tabs={subTabsRow} onOpen={(g) => setDetailArcade(g)} />
+        <ArcadeBoard onOpen={(g) => setDetailArcade(g)} />
       ) : (
-        <div className="mt-5">
+        <div className="mt-4">
       <SectionHead no="01" title="限免情报" en="IOS APP FREEBIES" />
-      {subTabsRow}
       {/* 分类改成一排横向切换页：本体限免 / 内购限免 / 降价 / 关注并排，
           点哪个只看哪个，不再用「全部」把三块长列表叠在同一页里。 */}
       <div
@@ -3559,25 +3581,7 @@ function AppsPage({
           </button>
         ))}
       </div>
-      <div className="relative mt-2">
-        <input
-          ref={searchRef}
-          aria-label="搜索应用"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="搜索应用 · 含 App Store 全库"
-          className="w-full rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] py-2.5 pl-3.5 pr-10 text-sm text-[var(--text)] outline-none backdrop-blur-md focus:border-[var(--accent)]"
-        />
-        {search ? (
-          <SearchClearButton
-            onClear={() => {
-              setSearch("");
-              searchRef.current?.focus();
-            }}
-          />
-        ) : null}
-      </div>
-      {/* 区服放在搜索框正下方：切一下就同时改变「本体限免」和
+      {/* 区服放在分类切换条下方：切一下就同时改变「本体限免」和
           「App Store 全库」的检索范围，不用再滚到区块里找。
           内购限免 / 降价 / 关注都不跟区服筛选走，这时藏起来免得误以为
           切区服能把它们筛掉；正在搜全库时仍然要显示。 */}
