@@ -67,6 +67,8 @@
 
 | 40 | **关注页首张卡片顶到「本体｜内购｜降价｜关注」标签行** | 反馈「关注页的 App 卡片太靠上了，和四个标签重叠」。查 `chip === "watch"` 下的四组列表：限免（`watchFree`）、内购（`watchIap`）、降价（`watchDrops`）三组的容器都带 `mt-4`，唯独 App Store 应用组（`watchStore`）的 `<div className="flex flex-col gap-[9px]">` 漏了这个上边距。只关注了 App Store 应用时（另外三组都为空，正是反馈里的截图情形），第一张卡片直接贴住标签行下沿，看起来像把标签压住了。补上 `mt-4` 后实测（Playwright 390×844，关注 3 个 App Store 应用）：标签行 bottom 130px → 首卡 top 146px，**间距 16px**，与「本体」等其他 tab 完全一致，控制台零报错。前端改动需出包。 |
 
+| 41 | **打开 App 要加载半天：首屏 4 秒，且每次重开都一样慢** | 反馈「打开app都要加载半天」。真机复现（公网后端 + Fast 3G）：冷启动首屏 **4.0–4.4s**，二次打开同样慢。根因三处：①整个 App 被单个查询 `listDeals` 卡住（`dealsQuery.isPending` 时只显示「加载中…」），而它一次返回 182 条 / 652KB；②react-query 缓存只在内存，iOS 杀进程后全丢，每次冷启动必重下；③474KB 单 JS bundle（DOMContentLoaded 就 3.5s）。**本轮修 ①②**：在 `sdk-shim.tsx` 用 react-query 内置 `dehydrate/hydrate` 做持久化缓存（不新增依赖）——模块加载时同步从 localStorage 恢复白名单查询（`deals`/`appPrices`/`fxRates`/`appleArcadeGames`/`appWatches`/`freeHistory`，仅成功态、7 天有效），首屏先渲染缓存，后台按各自 staleTime 静默刷新（stale-while-revalidate）；写盘 1.2s 防抖、超配额自动丢弃不影响功能。缓存带 **session token 指纹**，账号切换时指纹不符即丢弃，`handleSessionChange` / 会话失效路径主动 `clearPersistedQueryCache()`，杜绝串账号 saved/claimed 标记。实测（真机模型，数据请求人为延迟 2.5s）：**冷启动 3101ms → 命中缓存 412ms（7.5×），缓存命中零阻塞请求（actions=[]）**；榜单/内购/关注回归通过、零 console 报错。前端改动需出包。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
@@ -171,6 +173,7 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.26 | 32 | `FGame-v1.0.26-b32-unsigned.ipa` | 合并首发 1.0.24–1.0.26：区内详情补 ≈¥；价格对比四区高亮；排行榜加搜索栏；「本体｜内购」内购对比；榜单 50 → 100 条（Apple RSS 上限），榜内搜索覆盖前 100 名（CI run 43703166572，commit 3fa1db2；sha256 `9c16deb3…e97d7`） |
 | 1.0.27 | 33 | `FGame-v1.0.27-b33-unsigned.ipa` | 内购对比从「另起一块表」改为「各区价格对比」标题行右侧的「本体｜内购」切换；内购价改人民币做主行（本币降为副行）；读不到的区合并成一行；标题行与切换胶囊垂直对齐（中心差 0.00px），删掉标题行右侧排序小字与表格上方两段说明（第 39 条；CI run 43721454974，commit 31de7c1；sha256 `2528e1c3…78dd`） |
 | 1.0.28 | 34 | —（尚未出包） | 关注页 App Store 应用组补 `mt-4`：只关注了应用时首卡不再顶住「本体｜内购｜降价｜关注」标签行（第 40 条） |
+| 1.0.29 | 35 | —（尚未出包） | 冷启动秒开：react-query 查询结果持久化到 localStorage（白名单 + token 指纹 + 后台静默刷新），二次打开首屏 4s → 0.4s（第 41 条） |
 
 同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.19` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 

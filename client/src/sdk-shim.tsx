@@ -7,7 +7,7 @@
  * dependency-free equivalent. Public API kept identical so App.tsx needs no
  * rewrite.
  */
-import { QueryClient } from "@tanstack/react-query";
+import { QueryClient, dehydrate, hydrate, type DehydratedState } from "@tanstack/react-query";
 import { z } from "zod";
 import type { ReactNode } from "react";
 
@@ -182,6 +182,77 @@ export const spaceQueryClient = new QueryClient({
     queries: { retry: 1, refetchOnWindowFocus: false, staleTime: 30_000 },
   },
 });
+
+/* ------------------------------------------------------------------ */
+/* Offline / cold-start cache (stale-while-revalidate)                  */
+/* ------------------------------------------------------------------ */
+// The whole UI used to hang on ONE 650 KB `listDeals` request: react-query's
+// cache lives in memory only, so killing the app (routine on iOS) threw it
+// away and every cold start paid the full download + 4 s of loading again.
+// Persist the handful of expensive/shared queries to localStorage. On the
+// next launch hydrate them BEFORE React renders, so the first paint shows
+// last session's data instantly; react-query still refetches anything past
+// its staleTime in the background. Only successful queries are stored, and
+// volatile per-item lookups (detail/reviews/translate) are excluded to keep
+// the blob small.
+const CACHE_KEY = "fgame-query-cache-v1";
+const CACHE_MAX_AGE = 7 * 24 * 60 * 60_000;
+const CACHE_PREFIXES = ["deals", "appPrices", "fxRates", "appleArcadeGames", "appWatches", "freeHistory"];
+
+(function restoreQueryCache() {
+  try {
+    if (typeof localStorage === "undefined") return;
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { ts: number; token: string; state: DehydratedState };
+    // `deals` keys carry per-user saved/claimed marks but their queryKey has
+    // no token — never let one account's snapshot flash for another. The
+    // token is a fingerprint; an empty token means the signed-out pool.
+    const tokenNow = localStorage.getItem("baipiao-session-token") ?? "";
+    if (!parsed?.state || typeof parsed.ts !== "number" || Date.now() - parsed.ts > CACHE_MAX_AGE || parsed.token !== tokenNow) {
+      localStorage.removeItem(CACHE_KEY);
+      return;
+    }
+    hydrate(spaceQueryClient, parsed.state);
+  } catch {
+    // Corrupt/oversized blob or storage disabled — ignore, network still works.
+    try { localStorage.removeItem(CACHE_KEY); } catch { /* noop */ }
+  }
+})();
+
+(function persistQueryCache() {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = () => {
+    timer = null;
+    try {
+      if (typeof localStorage === "undefined") return;
+      const state = dehydrate(spaceQueryClient, {
+        shouldDehydrateQuery: (q) =>
+          q.state.status === "success" &&
+          CACHE_PREFIXES.some((p) => (q.queryKey[0] as string)?.startsWith?.(p) ?? false),
+      });
+      if (!state.queries.length) return;
+      const token = localStorage.getItem("baipiao-session-token") ?? "";
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), token, state }));
+    } catch {
+      // Quota exceeded (WebView caps localStorage) — drop the blob so a later
+      // flush can retry with a fresh size; the app keeps working regardless.
+      try { localStorage.removeItem(CACHE_KEY); } catch { /* noop */ }
+    }
+  };
+  spaceQueryClient.getQueryCache().subscribe(() => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(flush, 1200);
+  });
+})();
+
+/** Drop the persisted cache (e.g. on account switch, to avoid showing another
+ *  user's saved/claimed marks for a frame). The in-memory queries are cleared
+ *  too so the next mount refetches under the new identity. */
+export function clearPersistedQueryCache() {
+  try { localStorage.removeItem(CACHE_KEY); } catch { /* noop */ }
+  spaceQueryClient.clear();
+}
 
 export type ApiRequest<C, K extends keyof C> = C[K] extends (args: infer Q) => Promise<any> ? Q : never;
 export type ApiResponse<C, K extends keyof C> = C[K] extends (...a: any[]) => Promise<infer R> ? R : never;

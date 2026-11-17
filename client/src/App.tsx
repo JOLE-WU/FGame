@@ -15,7 +15,7 @@ type TouchEvent as ReactTouchEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { SafeAreaTopScrim, SafeAreaBottomScrim, oauthPublicBase, oauthSharecode } from "./sdk-shim";
+import { SafeAreaTopScrim, SafeAreaBottomScrim, oauthPublicBase, oauthSharecode, clearPersistedQueryCache } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
 import { isNativePlatform, openPlatformLoginNative, onPlatformAuthCode } from "./auth-bridge";
 
@@ -8482,6 +8482,7 @@ export function App() {
         if (!r.username) {
           storeSession(null);
           setSession(null);
+          clearPersistedQueryCache();
         } else {
           if (r.username !== stored.username) {
             const next = { token: stored.token, username: r.username };
@@ -8509,6 +8510,8 @@ export function App() {
   const handleSessionChange = (next: Session | null) => {
     storeSession(next);
     setSession(next);
+    // 身份变了：丢掉持久化的缓存，避免上一个账号的 saved/claimed 标记闪现。
+    clearPersistedQueryCache();
     if (next) syncThemeFromAccount(next.token, next.username);
     queryClient.invalidateQueries({ queryKey: ["deals"] });
     queryClient.invalidateQueries({ queryKey: ["accounts"] });
