@@ -24,6 +24,7 @@ import Capacitor
 
 extension Notification.Name {
     static let fgameOAuthCode = Notification.Name("fgameOAuthCode")
+    static let fgameClaimResult = Notification.Name("fgameClaimResult")
 }
 
 private func fgameFindWebView(_ view: UIView) -> WKWebView? {
@@ -170,6 +171,275 @@ final class FGAMEOAuthViewController: UIViewController, WKNavigationDelegate {
     }
 }
 
+
+// MARK: - FGame Epic one-tap claim (Heybox-style)
+//
+// Epic's 0-cost checkout lives on store.epicgames.com behind a Cloudflare
+// gate that rejects datacenter IPs and launcher tokens. The only reliable
+// way to claim — the one Heybox/Heroic use — is a real browser session:
+// an embedded WKWebView sharing the system cookie jar (so an Epic login in
+// the OAuth view counts here too), navigated to the purchase deep link,
+// where we click through the 0-order exactly like a human.
+//
+// Flow:
+//   JS -> fgame://claim?payload=<base64 JSON:{offers:[{namespace,offerId,title}]}>
+//   AppDelegate presents FGameClaimViewController (WKWebView, .default store)
+//   WebView loads store.epicgames.com/purchase?offers=1-ns-id&... for each
+//   offer in turn; an injected script clicks GET -> Place Order -> I Accept,
+//   handles EULA, and watches for "Thanks for your order!" per offer.
+//   -> fgameClaimResult notification -> evaluateJavaScript in Capacitor view
+//   -> window 'fgameClaimResult' event -> claim-bridge.ts
+//
+// WKWebView cannot run JS inside a cross-origin checkout iframe from the
+// page context. We get around that at the native layer: decidePolicyFor
+// records the checkout frame's WKFrameInfo, and evaluateJavaScript(_:in:)
+// injects the click script straight into that frame. Two injections run:
+// a document-end script on the top page (purchase CTA / EULA / success text)
+// and, once the checkout frame commits, the same helper injected into that
+// frame via `in: frame` so `Place Order` is reachable cross-origin.
+
+/// Injected into the top store page. Polls for the purchase CTA, the EULA
+/// checkbox and the success banner, reporting each transition back to native
+/// with a `fgame://claim-ev?step=...` navigation that decidePolicy cancels.
+private func fgameClaimTopScript() -> String {
+    return """
+    (function () {
+      var ACTIVE = true;
+      function ev(step) {
+        try {
+          var q = 'fgame://claim-ev?step=' + encodeURIComponent(step);
+          window.location.href = q;
+        } catch (e) {}
+      }
+      function visible(el) {
+        if (!el) return false;
+        var r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
+      function clickText(sel, texts) {
+        var nodes = document.querySelectorAll(sel);
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i], t = (n.innerText || n.textContent || '').trim().toLowerCase();
+          for (var j = 0; j < texts.length; j++) {
+            if (t.indexOf(texts[j]) >= 0 && visible(n)) { n.click(); return true; }
+          }
+        }
+        return false;
+      }
+      function tick() {
+        if (!ACTIVE) return;
+        try {
+          var txt = (document.body && document.body.innerText || '').toLowerCase();
+          if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
+          if (txt.indexOf('already own') >= 0 || txt.indexOf('in library') >= 0) { ev('owned'); ACTIVE = false; return; }
+          var agree = document.querySelector('#agree') || document.querySelector('input[type=checkbox][id*=agree]');
+          if (agree && !agree.checked && visible(agree)) { agree.click(); }
+          var accepted = clickText('button', ['accept', 'i accept', 'yes, buy now', 'continue']);
+          if (accepted) { ev('accepted'); }
+          var cta = document.querySelector('button[data-testid="purchase-cta-button"]');
+          if (cta && visible(cta)) {
+            var ct = (cta.innerText || '').trim().toLowerCase();
+            if (ct.indexOf('get') >= 0 || ct.indexOf('buy') >= 0) { cta.click(); ev('cta'); }
+            else if (ct.indexOf('in library') >= 0) { ev('owned'); ACTIVE = false; return; }
+          }
+        } catch (e) {}
+        setTimeout(tick, 700);
+      }
+      setTimeout(tick, 900);
+    })();
+    """
+}
+
+/// Injected into the checkout frame (via evaluateJavaScript in:frame).
+/// Clicks Place Order once the total is 0, handles EU "I Accept" and PIN.
+private func fgameClaimFrameScript() -> String {
+    return """
+    (function () {
+      var ACTIVE = true;
+      function ev(step) {
+        try { window.location.href = 'fgame://claim-ev?step=' + encodeURIComponent(step); } catch (e) {}
+      }
+      function visible(el) {
+        if (!el) return false;
+        var r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }
+      function clickText(texts) {
+        var nodes = document.querySelectorAll('button');
+        for (var i = 0; i < nodes.length; i++) {
+          var n = nodes[i], t = (n.innerText || n.textContent || '').trim().toLowerCase();
+          if (t.indexOf('loading') >= 0) continue;
+          for (var j = 0; j < texts.length; j++) {
+            if (t.indexOf(texts[j]) >= 0 && visible(n)) { n.click(); return true; }
+          }
+        }
+        return false;
+      }
+      function tick() {
+        if (!ACTIVE) return;
+        try {
+          var txt = (document.body && document.body.innerText || '').toLowerCase();
+          if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
+          if (txt.indexOf('captcha') >= 0 || txt.indexOf('challenge') >= 0) { ev('captcha'); ACTIVE = false; return; }
+          var accepted = clickText(['i accept', 'accept']);
+          if (accepted) { ev('accepted'); return; }
+          var placed = clickText(['place order', 'complete order', 'buy now']);
+          if (placed) { ev('placed'); }
+        } catch (e) {}
+        setTimeout(tick, 800);
+      }
+      setTimeout(tick, 900);
+    })();
+    """
+}
+
+struct FGameClaimOffer {
+    let namespace: String
+    let offerId: String
+    let title: String
+}
+
+final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
+    private let offers: [FGameClaimOffer]
+    private var webView: WKWebView!
+    private var index = 0
+    private var claimed: [String] = []
+    private var failed: [String] = []
+    private var finished = false
+    private var checkoutFrame: WKFrameInfo?
+    private var frameInjectTimer: Timer?
+
+    init(offers: [FGameClaimOffer]) {
+        self.offers = offers
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor(red: 0.043, green: 0.063, blue: 0.149, alpha: 1)
+
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .default()
+        let top = WKUserScript(source: fgameClaimTopScript(), injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(top)
+
+        webView = WKWebView(frame: .zero, configuration: config)
+        webView.navigationDelegate = self
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.allowsBackForwardNavigationGestures = true
+
+        let bar = UIView()
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.backgroundColor = UIColor(red: 0.043, green: 0.063, blue: 0.149, alpha: 1)
+        let title = UILabel()
+        title.translatesAutoresizingMaskIntoConstraints = false
+        title.text = "一键领取 Epic 游戏"
+        title.textColor = .white
+        title.font = .boldSystemFont(ofSize: 15)
+        let progress = UILabel()
+        progress.translatesAutoresizingMaskIntoConstraints = false
+        progress.text = "准备中…"
+        progress.textColor = UIColor(white: 0.75, alpha: 1)
+        progress.font = .systemFont(ofSize: 12)
+        progress.tag = 9101
+        let close = UIButton(type: .system)
+        close.translatesAutoresizingMaskIntoConstraints = false
+        close.setTitle("结束", for: .normal)
+        close.setTitleColor(.white, for: .normal)
+        close.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+
+        view.addSubview(bar)
+        bar.addSubview(title)
+        bar.addSubview(progress)
+        bar.addSubview(close)
+        view.addSubview(webView)
+
+        NSLayoutConstraint.activate([
+            bar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            bar.heightAnchor.constraint(equalToConstant: 52),
+            title.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 18),
+            progress.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+            progress.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 18),
+            close.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            close.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -18),
+            webView.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        frameInjectTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self = self, let frame = self.checkoutFrame else { return }
+            self.webView.evaluateJavaScript(fgameClaimFrameScript(), in: frame) { _, _ in }
+        }
+        loadCurrentOffer()
+    }
+
+    private func setProgress(_ text: String) {
+        if let p = view.viewWithTag(9101) as? UILabel { p.text = text }
+    }
+
+    private func loadCurrentOffer() {
+        guard index < offers.count else { finish(); return }
+        let offer = offers[index]
+        setProgress("领取 \(index + 1)/\(offers.count)：\(offer.title)")
+        let encoded = "1-\(offer.namespace)-\(offer.offerId)"
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "1-\(offer.namespace)-\(offer.offerId)"
+        if let url = URL(string: "https://store.epicgames.com/purchase?offers=\(encoded)") {
+            webView.load(URLRequest(url: url))
+        } else {
+            failed.append(offer.title); index += 1; loadCurrentOffer()
+        }
+    }
+
+    @objc private func closeTapped() { finish() }
+
+    private func finish() {
+        guard !finished else { return }
+        finished = true
+        frameInjectTimer?.invalidate()
+        frameInjectTimer = nil
+        NotificationCenter.default.post(
+            name: .fgameClaimResult, object: nil,
+            userInfo: ["ok": !failed.isEmpty || !claimed.isEmpty,
+                       "claimed": claimed, "failed": failed,
+                       "total": offers.count]
+        )
+        dismiss(animated: true)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if let url = navigationAction.request.url, url.scheme == "fgame", url.host == "claim-ev" {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let step = items.first(where: { $0.name == "step" })?.value ?? ""
+            if step == "success" {
+                if index < offers.count { claimed.append(offers[index].title) }
+                index += 1
+                checkoutFrame = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.loadCurrentOffer() }
+            } else if step == "owned" {
+                index += 1
+                checkoutFrame = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.loadCurrentOffer() }
+            }
+            decisionHandler(.cancel)
+            return
+        }
+        if let f = navigationAction.targetFrame, !f.isMainFrame,
+           let u = navigationAction.request.url,
+           u.absoluteString.contains("epicgames") {
+            checkoutFrame = f
+        }
+        decisionHandler(.allow)
+    }
+}
+
 // MARK: - Page base colour bridge
 //
 // The Capacitor web view is inset by the safe area, so the strip above the
@@ -237,6 +507,29 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                   let b64 = data.base64EncodedString() as String? else { return }
             let js = "(function(){try{var d=JSON.parse(atob('\(b64)'));" +
                      "window.dispatchEvent(new CustomEvent('fgameOAuthCode',{detail:d}));}catch(e){}})();"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                guard let root = self.window?.rootViewController?.view,
+                      let web = fgameFindWebView(root) else { return }
+                web.evaluateJavaScript(js, completionHandler: nil)
+            }
+        }
+        // Forward one-tap claim results back to the page.
+        NotificationCenter.default.addObserver(
+            forName: .fgameClaimResult,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self = self else { return }
+            let obj: [String: Any] = [
+                "ok": note.userInfo?["ok"] as? Bool ?? false,
+                "claimed": note.userInfo?["claimed"] as? [String] ?? [],
+                "failed": note.userInfo?["failed"] as? [String] ?? [],
+                "total": note.userInfo?["total"] as? Int ?? 0,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: obj),
+                  let b64 = data.base64EncodedString() as String? else { return }
+            let js = "(function(){try{var d=JSON.parse(atob('\(b64)'));" +
+                     "window.dispatchEvent(new CustomEvent('fgameClaimResult',{detail:d}));}catch(e){}})();"
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 guard let root = self.window?.rootViewController?.view,
                       let web = fgameFindWebView(root) else { return }
@@ -343,6 +636,38 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
                ["https"].contains(targetURL.scheme?.lowercased() ?? "") {
                 DispatchQueue.main.async {
                     let vc = FGAMEOAuthViewController(platform: platform, url: targetURL)
+                    vc.modalPresentationStyle = .fullScreen
+                    self.window?.rootViewController?.present(vc, animated: true)
+                }
+            }
+            return true
+        }
+        // fgame://claim?payload=<base64 JSON of {offers:[{namespace,offerId,title}]}>
+        if url.scheme == "fgame", url.host == "claim" {
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+            let payload = items.first(where: { $0.name == "payload" })?.value ?? ""
+            var offers: [FGameClaimOffer] = []
+            if let raw = payload.data(using: .utf8),
+               let decoded = Data(base64Encoded: raw),
+               let json = (try? JSONSerialization.jsonObject(with: decoded)) as? [String: Any],
+               let arr = json["offers"] as? [[String: Any]] {
+                for o in arr {
+                    let ns = o["namespace"] as? String ?? ""
+                    let oid = o["offerId"] as? String ?? ""
+                    let t = o["title"] as? String ?? "游戏"
+                    if !ns.isEmpty && !oid.isEmpty {
+                        offers.append(FGameClaimOffer(namespace: ns, offerId: oid, title: t))
+                    }
+                }
+            }
+            if offers.isEmpty {
+                NotificationCenter.default.post(
+                    name: .fgameClaimResult, object: nil,
+                    userInfo: ["ok": false, "claimed": [], "failed": [], "total": 0]
+                )
+            } else {
+                DispatchQueue.main.async {
+                    let vc = FGameClaimViewController(offers: offers)
                     vc.modalPresentationStyle = .fullScreen
                     self.window?.rootViewController?.present(vc, animated: true)
                 }

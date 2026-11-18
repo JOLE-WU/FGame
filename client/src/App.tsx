@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SafeAreaTopScrim, SafeAreaBottomScrim, oauthPublicBase, oauthSharecode, clearPersistedQueryCache } from "./sdk-shim";
 import { api, type ApiResponse } from "./api";
 import { isNativePlatform, openPlatformLoginNative, onPlatformAuthCode } from "./auth-bridge";
+import { isNativeClaimAvailable, openEpicClaimNative, onClaimResult, type ClaimOffer } from "./claim-bridge";
 
 // Injected by vite.config.ts from FGAME_VERSION / FGAME_BUILD (CI) or
 // package.json (local). Shown at the bottom of the "我的" page so any
@@ -850,6 +851,31 @@ function epicSignInUrl(): string {
   return EPIC_SIGNIN_URL;
 }
 
+/**
+ * 从 Epic 0 元结算页链接里解析出 {namespace, offerId}。
+ * purchaseUrl 形如 …/purchase?offers=1-<ns>-<id>&offers=1-<ns2>-<id2>，
+ * 该链接本身就是服务端从官方 discover feed 的 namespace/offerId 拼出来的。
+ */
+function claimOffersFromDeal(deal: Deal, title: string): ClaimOffer[] {
+  const out: ClaimOffer[] = [];
+  const seen = new Set<string>();
+  const urls = [ deal.claimUrl ?? "", ...deal.epicOffers.map((o) => o.purchaseUrl), deal.combinedPurchaseUrl ?? "" ];
+  for (const u of urls) {
+    let parsed: URL;
+    try { parsed = new URL(u); } catch { continue; }
+    for (const value of parsed.searchParams.getAll("offers")) {
+      const m = /^1-([a-z0-9]+)-([a-z0-9]+)$/i.exec(value.trim());
+      if (!m) continue;
+      const ns = m[1]!, oid = m[2]!;
+      const key = `${ns}:${oid}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ namespace: ns, offerId: oid, title });
+    }
+  }
+  return out;
+}
+
 function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Deal; now: number; onClose: () => void; authToken?: string; onQueueClaim?: (d: Deal) => void }) {
   const queryClient = useQueryClient();
   const [lightbox, setLightbox] = useState<number | null>(null);
@@ -873,6 +899,20 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["deals"] }),
   });
 
+  // Epic 一键入库（仅 iOS 原生壳）：领取结果回来后标记已领并刷新游戏库。
+  const [claimNote, setClaimNote] = useState<string | null>(null);
+  useEffect(() => {
+    return onClaimResult((r) => {
+      if (r.claimed.length > 0) {
+        api.toggleMark({ dealId: deal.id, kind: "claimed", authToken }).catch(() => {});
+        queryClient.invalidateQueries({ queryKey: ["deals"] });
+        queryClient.invalidateQueries({ queryKey: ["library"] });
+        setClaimNote(`已一键入库 ${r.claimed.length} 款${r.failed.length ? `，${r.failed.length} 款需手动` : ""}`);
+      } else {
+        setClaimNote(r.total ? "自动领取未成功，请用下方官方领取页手动完成" : "未识别到可领取的项目");
+      }
+    });
+  }, [deal.id, authToken, queryClient]);
   const dealId = deal.id;
   const isGameOrApp = deal.tags.includes("game") || deal.tags.includes("ios");
   // iOS 限免条目改用「App Store 官方资料」区块统一承载介绍与截图，
@@ -1152,6 +1192,25 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
         ) : null}
 
         <div className="mt-8 grid gap-3">
+          {isNativeClaimAvailable() && deal.status === "active" && (deal.gamePlatform === "epic" || purchaseMain) ? (
+            (() => {
+              const offers = claimOffersFromDeal(deal, mainTitle);
+              if (offers.length === 0) return null;
+              return (
+                <button
+                  type="button"
+                  aria-label={`一键入库 ${mainTitle}（自动领取本体与免费附加内容）`}
+                  onClick={() => { setClaimNote(null); openEpicClaimNative(offers); }}
+                  className="cta-hard flex items-center justify-center gap-2 rounded-[14px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-[13px] text-center text-[15px] font-bold text-[var(--accent)]"
+                >
+                  ⚡ 一键入库{offers.length > 1 ? `（${offers.length} 项含免费附加内容）` : ""}
+                </button>
+              );
+            })()
+          ) : null}
+          {claimNote ? (
+            <p className="text-center text-xs font-medium leading-relaxed text-[var(--accent)]">{claimNote}</p>
+          ) : null}
           {deal.status === "upcoming" ? (
             <span className="rounded-[14px] bg-[var(--surface2)] px-4 py-3.5 text-center text-[15px] font-medium text-[var(--dim)]">未开始</span>
           ) : deal.claimUrl ? (
