@@ -1114,22 +1114,19 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
               {worth ? <s className="font-mono text-xs text-[var(--dim2)]">{worth}</s> : null}
             </>
           )}
-          {/* App Store 限免：价格行右侧「获取」图标，点击跳转 App Store 领取。
-              self-center 与价格文字垂直居中对齐；仅 App Store 来源显示（Epic/Prime 有各自专属按钮）。 */}
+          {/* App Store 限免：价格行右侧「获取」胶囊（同 App Store 的 GET 按钮样式），
+              点击跳转 App Store 领取。h-7 与「免费」文字行高一致，中心偏差 0；
+              仅 App Store 来源显示（Epic/Prime 有各自专属按钮）。 */}
           {deal.status === "active" && deal.claimUrl && deal.claimUrl.includes("apps.apple.com") ? (
             <a
               href={deal.claimUrl}
               target="_blank"
               rel="noreferrer"
               aria-label={`跳转 App Store 获取 ${mainTitle}`}
-              className="ml-auto inline-flex h-7 w-7 shrink-0 self-center items-center justify-center rounded-full border transition active:translate-y-px"
+              className="ml-auto inline-flex h-7 shrink-0 self-center items-center justify-center rounded-full border px-3.5 text-xs font-bold tracking-[0.02em] transition active:translate-y-px"
               style={{ color: "var(--free-ink)", background: "var(--free-bg)", borderColor: "color-mix(in srgb, var(--free-ink) 35%, transparent)" }}
             >
-              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M12 4v11" />
-                <path d="M7.5 10.5 12 15l4.5-4.5" />
-                <path d="M5 19.5h14" />
-              </svg>
+              获取
             </a>
           ) : null}
           {deal.saved ? <span className="text-[13px] font-medium text-[var(--accent)]">★ 已收藏</span> : null}
