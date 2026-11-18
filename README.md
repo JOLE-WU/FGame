@@ -69,6 +69,8 @@
 
 | 41 | **打开 App 要加载半天：首屏 4 秒，且每次重开都一样慢** | 反馈「打开app都要加载半天」。真机复现（公网后端 + Fast 3G）：冷启动首屏 **4.0–4.4s**，二次打开同样慢。根因三处：①整个 App 被单个查询 `listDeals` 卡住（`dealsQuery.isPending` 时只显示「加载中…」），而它一次返回 182 条 / 652KB；②react-query 缓存只在内存，iOS 杀进程后全丢，每次冷启动必重下；③474KB 单 JS bundle（DOMContentLoaded 就 3.5s）。**本轮修 ①②**：在 `sdk-shim.tsx` 用 react-query 内置 `dehydrate/hydrate` 做持久化缓存（不新增依赖）——模块加载时同步从 localStorage 恢复白名单查询（`deals`/`appPrices`/`fxRates`/`appleArcadeGames`/`appWatches`/`freeHistory`，仅成功态、7 天有效），首屏先渲染缓存，后台按各自 staleTime 静默刷新（stale-while-revalidate）；写盘 1.2s 防抖、超配额自动丢弃不影响功能。缓存带 **session token 指纹**，账号切换时指纹不符即丢弃，`handleSessionChange` / 会话失效路径主动 `clearPersistedQueryCache()`，杜绝串账号 saved/claimed 标记。实测（真机模型，数据请求人为延迟 2.5s）：**冷启动 3101ms → 命中缓存 412ms（7.5×），缓存命中零阻塞请求（actions=[]）**；榜单/内购/关注回归通过、零 console 报错。前端改动需出包。 |
 
+| 42 | **游戏库一排控件三种高度** | 反馈「这三个胶囊不等高」。实测「04/游戏库」这一排：展示方式胶囊组 31px、排序下拉 32px、「更新时长」按钮 27px，三种高度视觉参差。原来靠各自 padding 撑高（`py-1.5` / `py-[7px]`，浏览器 select 又有默认行高）。统一改成固定 `h-8`（32px）+ `items-center`，胶囊按钮改 `flex h-full items-center`，下拉与两个按钮去掉 py 用 `h-8`。实测四控件统一 32px、同一水平线（top 774 / bottom 806），390×844 截图确认，零报错。前端改动需出包。 |
+
 ### 自动回连原理（为什么必须做成原生 App）
 Epic 登录页带 `X-Frame-Options: SAMEORIGIN` 与 `COOP: same-origin`，浏览器页面**既不能 iframe 嵌入、也读不到跨域弹窗的 URL/内容**，Epic 也从不 postMessage 授权码 —— 所以纯 Web 版只能让用户复制粘贴。小黑盒 / Heroic 这类原生 App 用内嵌 WKWebView 可以监听导航与页面内容，这正是原生壳能自动化的原因。
 
@@ -174,6 +176,7 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.27 | 33 | `FGame-v1.0.27-b33-unsigned.ipa` | 内购对比从「另起一块表」改为「各区价格对比」标题行右侧的「本体｜内购」切换；内购价改人民币做主行（本币降为副行）；读不到的区合并成一行；标题行与切换胶囊垂直对齐（中心差 0.00px），删掉标题行右侧排序小字与表格上方两段说明（第 39 条；CI run 43721454974，commit 31de7c1；sha256 `2528e1c3…78dd`） |
 | 1.0.28 | 34 | 并入 1.0.29 | 关注页 App Store 应用组补 `mt-4`：只关注了应用时首卡不再顶住「本体｜内购｜降价｜关注」标签行（第 40 条） |
 | 1.0.29 | 35 | `FGame-v1.0.29-b35-unsigned.ipa` | 合并首发 1.0.28–1.0.29：关注页补 `mt-4`；冷启动秒开——react-query 查询持久化到 localStorage（白名单 + token 指纹 + 后台静默刷新），二次打开首屏 4s → 0.4s（第 40/41 条；CI run 44110242273，commit cf00468；sha256 `ae147cc3…bb6aa`） |
+| 1.0.30 | 36 | —（尚未出包） | 游戏库一排控件统一 32px 高、同一水平线（第 42 条） |
 
 同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.19` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 

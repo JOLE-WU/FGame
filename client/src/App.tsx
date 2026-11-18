@@ -7184,7 +7184,7 @@ function MinePage({
       {/* library */}
       <SectionHead no="04" title="游戏库" en="MY LIBRARY" />
       <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-full bg-[var(--seg-track)] p-1 backdrop-blur-md" role="group" aria-label="游戏库展示方式">
+        <div className="flex h-8 items-center rounded-full bg-[var(--seg-track)] p-[3px] backdrop-blur-md" role="group" aria-label="游戏库展示方式">
           {(
             [
               { key: "list", label: "列表" },
@@ -7198,7 +7198,7 @@ function MinePage({
               aria-pressed={libView === v.key}
               aria-label={`游戏库按${v.label}展示`}
               onClick={() => applyLibPrefs(v.key, libSort)}
-              className={`rounded-full px-3 py-1.5 text-[11px] leading-none transition-colors ${libView === v.key ? "bg-grad font-bold text-[var(--accent-ink)]" : "font-medium text-[var(--dim)]"}`}
+              className={`flex h-full items-center rounded-full px-3 text-[11px] leading-none transition-colors ${libView === v.key ? "bg-grad font-bold text-[var(--accent-ink)]" : "font-medium text-[var(--dim)]"}`}
             >
               {v.label}
             </button>
@@ -7210,7 +7210,7 @@ function MinePage({
           aria-label="游戏库排序"
           value={libSort}
           onChange={(e) => applyLibPrefs(libView, e.target.value as LibSort)}
-          className="rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 py-[7px] text-[11px] font-medium text-[var(--dim)] backdrop-blur-md"
+          className="h-8 rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 text-[11px] font-medium text-[var(--dim)] backdrop-blur-md"
         >
           <option value="default">默认排序</option>
           <option value="playtime">按游戏时长</option>
@@ -7222,7 +7222,7 @@ function MinePage({
           aria-label="更新游戏时长"
           disabled={refreshPt.isPending}
           onClick={() => refreshPt.mutate()}
-          className="rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 py-[7px] text-[11px] font-bold leading-none text-[var(--accent)] backdrop-blur-md disabled:opacity-50"
+          className="inline-flex h-8 items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-soft)] px-3 text-[11px] font-bold leading-none text-[var(--accent)] backdrop-blur-md disabled:opacity-50"
         >
           {refreshPt.isPending ? "更新中…" : "↻ 更新时长"}
         </button>
@@ -7237,7 +7237,7 @@ function MinePage({
                 groups.every((g) => libFolded.includes(g.platform)) ? [] : groups.map((g) => g.platform),
               )
             }
-            className="rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 py-[7px] text-[11px] font-medium leading-none text-[var(--dim)] backdrop-blur-md"
+            className="inline-flex h-8 items-center rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 text-[11px] font-medium leading-none text-[var(--dim)] backdrop-blur-md"
           >
             {groups.every((g) => libFolded.includes(g.platform)) ? "全部展开" : "全部折叠"}
           </button>
