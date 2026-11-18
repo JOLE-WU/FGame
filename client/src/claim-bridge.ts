@@ -17,6 +17,10 @@ export type ClaimOffer = { namespace: string; offerId: string; title: string };
 export type ClaimResult = {
   ok: boolean;
   claimed: string[];
+  /** Titles already in the user's Epic library ("already own" / "in library").
+   *  These count as 已领取 too — the game IS in the account, just not a new
+   *  order. Optional so older native builds (which never sent it) still work. */
+  owned?: string[];
   failed: string[];
   total: number;
 };

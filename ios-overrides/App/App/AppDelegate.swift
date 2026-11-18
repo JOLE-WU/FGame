@@ -304,6 +304,11 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
     private var webView: WKWebView!
     private var index = 0
     private var claimed: [String] = []
+    // Titles already present in the user's Epic library ("already own" /
+    // "in library"). These are NOT new orders but the game IS in the account,
+    // so the app must still mark the deal 已领取 — otherwise a game the user
+    // already owns stays stuck on 「限免 FREE」 after one-tap claim.
+    private var owned: [String] = []
     private var failed: [String] = []
     private var finished = false
     private var checkoutFrame: WKFrameInfo?
@@ -406,8 +411,8 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
         frameInjectTimer = nil
         NotificationCenter.default.post(
             name: .fgameClaimResult, object: nil,
-            userInfo: ["ok": !failed.isEmpty || !claimed.isEmpty,
-                       "claimed": claimed, "failed": failed,
+            userInfo: ["ok": !failed.isEmpty || !claimed.isEmpty || !owned.isEmpty,
+                       "claimed": claimed, "owned": owned, "failed": failed,
                        "total": offers.count]
         )
         dismiss(animated: true)
@@ -424,6 +429,10 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
                 checkoutFrame = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.loadCurrentOffer() }
             } else if step == "owned" {
+                // Already in the user's Epic library — record it as owned so
+                // the front end still marks the deal 已领取. Skipping without
+                // recording is exactly why owned games never showed the badge.
+                if index < offers.count { owned.append(offers[index].title) }
                 index += 1
                 checkoutFrame = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.loadCurrentOffer() }
@@ -523,6 +532,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             let obj: [String: Any] = [
                 "ok": note.userInfo?["ok"] as? Bool ?? false,
                 "claimed": note.userInfo?["claimed"] as? [String] ?? [],
+                "owned": note.userInfo?["owned"] as? [String] ?? [],
                 "failed": note.userInfo?["failed"] as? [String] ?? [],
                 "total": note.userInfo?["total"] as? Int ?? 0,
             ]

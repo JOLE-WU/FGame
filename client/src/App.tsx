@@ -900,14 +900,25 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
   });
 
   // Epic 一键入库（仅 iOS 原生壳）：领取结果回来后标记已领并刷新游戏库。
+  // 原生回传的 claimed（本次新下单成功）和 owned（本来就在 Epic 库里，
+  // 「already own」/「in library」）都算「已在库」——对用户来说游戏确实
+  // 进账号了，卡片必须标已领取。此前只看 claimed，导致「Epic 已拥有的
+  // 游戏」一键入库后卡片永远停在「限免 FREE」。
   const [claimNote, setClaimNote] = useState<string | null>(null);
   useEffect(() => {
     return onClaimResult((r) => {
-      if (r.claimed.length > 0) {
+      const owned = Array.isArray(r.owned) ? r.owned : [];
+      const inAccount = r.claimed.length + owned.length;
+      if (inAccount > 0) {
+        // 已在库（新领 or 本来就有）都标记当前 deal 已领取。
         api.toggleMark({ dealId: deal.id, kind: "claimed", authToken }).catch(() => {});
         queryClient.invalidateQueries({ queryKey: ["deals"] });
         queryClient.invalidateQueries({ queryKey: ["library"] });
-        setClaimNote(`已一键入库 ${r.claimed.length} 款${r.failed.length ? `，${r.failed.length} 款需手动` : ""}`);
+        const parts: string[] = [];
+        if (r.claimed.length) parts.push(`新领取 ${r.claimed.length} 款`);
+        if (owned.length) parts.push(`${owned.length} 款本来就在库中，已同步标记`);
+        if (r.failed.length) parts.push(`${r.failed.length} 款需手动`);
+        setClaimNote(`✓ ${parts.join("；")}`);
       } else {
         setClaimNote(r.total ? "自动领取未成功，请用下方官方领取页手动完成" : "未识别到可领取的项目");
       }
