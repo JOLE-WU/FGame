@@ -179,7 +179,7 @@ open ios/App/App.xcworkspace     # 在 Xcode 里选设备/签名，Product → A
 | 1.0.28 | 34 | 并入 1.0.29 | 关注页 App Store 应用组补 `mt-4`：只关注了应用时首卡不再顶住「本体｜内购｜降价｜关注」标签行（第 40 条） |
 | 1.0.29 | 35 | `FGame-v1.0.29-b35-unsigned.ipa` | 合并首发 1.0.28–1.0.29：关注页补 `mt-4`；冷启动秒开——react-query 查询持久化到 localStorage（白名单 + token 指纹 + 后台静默刷新），二次打开首屏 4s → 0.4s（第 40/41 条；CI run 44110242273，commit cf00468；sha256 `ae147cc3…bb6aa`） |
 | 1.0.30 | 36 | —（尚未出包） | 游戏库一排控件统一 32px 高、同一水平线（第 42 条） |
-| 1.0.31 | 37 | —（尚未出包） | Epic 一键入库（原生 WKWebView 网页会话自动下单 + 免费 DLC 一起领，第 43 条；需真机验证） |
+| 1.0.31 | 37 | `FGame-v1.0.31-b37-unsigned.ipa` | Epic 一键入库（原生 WKWebView 网页会话自动下单 + 免费 DLC 一起领，第 43 条）；CI run 44241429641 编译通过，真机下单功能待验证 |
 
 同一版本号会被 `FGame-version.txt`（commit / 分支 / 构建时间）、`Info.plist` 的 `CFBundleShortVersionString` / `CFBundleVersion`、「我的」页底部 `FGame v1.0.19` 四路共用，CI 里由 `FGAME_VERSION` / `FGAME_BUILD` 注入，改版本只改这一处输入。
 
