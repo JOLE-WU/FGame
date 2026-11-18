@@ -375,7 +375,7 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
 
         frameInjectTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self, let frame = self.checkoutFrame else { return }
-            self.webView.evaluateJavaScript(fgameClaimFrameScript(), in: frame, completionHandler: nil)
+            self.webView.evaluateJavaScript(fgameClaimFrameScript(), in: frame, in: .page, completionHandler: nil)
         }
         loadCurrentOffer()
     }
