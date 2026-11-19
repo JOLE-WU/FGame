@@ -8441,46 +8441,74 @@ export const Actions = {
           mobile: deal.externalId.startsWith("epic-mobile-"),
         });
       }
-      // One real sync per involved platform, then reconcile by title.
+      // Incremental verification: a platform is only re-synced over the
+      // network when the LOCAL synced library cannot already confirm every
+      // guided item of that platform. Games that are already in the local
+      // library (the common case when re-verifying a queue) are confirmed
+      // instantly with zero network calls — only freshly-claimed items the
+      // local copy doesn't know about trigger a full sync.
       const syncNotes: { platform: Plat; note: string }[] = [];
-      const platState = new Map<Plat, { ok: boolean; note: string; count: number; titles: Set<string>; deviceByTitle: Map<string, Set<string>> }>();
+      type PlatState = { ok: boolean; note: string; count: number; titles: Set<string>; deviceByTitle: Map<string, Set<string>>; cached: boolean };
+      const platState = new Map<Plat, PlatState>();
       const needed = [...new Set(works.map((w) => w.plat).filter((p): p is Plat => p != null))];
+      const loadIndex = async (p: Plat) => {
+        const lib = await db
+          .select()
+          .from(schema.libraryItems)
+          .where(
+            and(
+              eq(schema.libraryItems.userId, uid),
+              eq(schema.libraryItems.platform, p),
+              eq(schema.libraryItems.source, "sync"),
+            ),
+          );
+        const titles = new Set<string>();
+        const deviceByTitle = new Map<string, Set<string>>();
+        for (const li of lib) {
+          titles.add(normName(li.title));
+          titles.add(normName(baseTitle(li.title)));
+          const devs = new Set((li.devicePlatforms ?? "").split(",").filter(Boolean));
+          for (const k of [normName(li.title), normName(baseTitle(li.title))]) {
+            const prev = deviceByTitle.get(k) ?? new Set<string>();
+            for (const d of devs) prev.add(d);
+            deviceByTitle.set(k, prev);
+          }
+        }
+        return { titles, deviceByTitle, count: lib.length };
+      };
+      // Same rule as the results pass below: a normal item is confirmed by a
+      // title match; a mobile item additionally needs an explicit mobile mark.
+      const confirmedLocally = (w: Work, idx: { titles: Set<string>; deviceByTitle: Map<string, Set<string>> }) => {
+        const matched = w.keys.filter((k) => idx.titles.has(k));
+        if (w.mobile) return matched.some((k) => idx.deviceByTitle.get(k)?.has("mobile"));
+        return matched.length > 0;
+      };
       for (const p of needed) {
         const row = await getAccountRow(ctx, uid, p);
         if (!row || !row.accountRef) {
-          platState.set(p, { ok: false, note: `还没绑定 ${PLAT_LABEL[p]} 账号，无法同步验库 — 先到「我的」绑定后再回来验库`, count: 0, titles: new Set(), deviceByTitle: new Map() });
+          platState.set(p, { ok: false, note: `还没绑定 ${PLAT_LABEL[p]} 账号，无法同步验库 — 先到「我的」绑定后再回来验库`, count: 0, titles: new Set(), deviceByTitle: new Map(), cached: false });
           continue;
         }
         if (p === "steam" && !row.steamApiKey) {
-          platState.set(p, { ok: false, note: "Steam 已绑定但还没填 API Key，同步不了游戏库 — 在「我的」的 Steam 卡里补填 Key 后再验库", count: 0, titles: new Set(), deviceByTitle: new Map() });
+          platState.set(p, { ok: false, note: "Steam 已绑定但还没填 API Key，同步不了游戏库 — 在「我的」的 Steam 卡里补填 Key 后再验库", count: 0, titles: new Set(), deviceByTitle: new Map(), cached: false });
           continue;
         }
         try {
-          const r = await syncPlatform(ctx, uid, p);
-          const lib = await db
-            .select()
-            .from(schema.libraryItems)
-            .where(
-              and(
-                eq(schema.libraryItems.userId, uid),
-                eq(schema.libraryItems.platform, p),
-                eq(schema.libraryItems.source, "sync"),
-              ),
-            );
-          const titles = new Set<string>();
-          const deviceByTitle = new Map<string, Set<string>>();
-          for (const li of lib) {
-            titles.add(normName(li.title));
-            titles.add(normName(baseTitle(li.title)));
-            const devs = new Set((li.devicePlatforms ?? "").split(",").filter(Boolean));
-            for (const k of [normName(li.title), normName(baseTitle(li.title))]) {
-              const prev = deviceByTitle.get(k) ?? new Set<string>();
-              for (const d of devs) prev.add(d);
-              deviceByTitle.set(k, prev);
-            }
+          // Read the local synced library first. If it already confirms every
+          // guided item of this platform, skip the expensive full sync.
+          let idx = await loadIndex(p);
+          const items = works.filter((w) => w.plat === p && w.guided);
+          const allLocal = items.length > 0 && idx.count > 0 && items.every((w) => confirmedLocally(w, idx));
+          let note: string;
+          if (allLocal) {
+            note = `${PLAT_LABEL[p]} ${items.length} 款均已在本地游戏库查到，跳过重新同步（上次同步 ${new Date(row.lastSyncAt ?? 0).toLocaleString()}）`;
+          } else {
+            const r = await syncPlatform(ctx, uid, p);
+            idx = await loadIndex(p);
+            note = r.note;
           }
-          platState.set(p, { ok: true, note: r.note, count: lib.length, titles, deviceByTitle });
-          syncNotes.push({ platform: p, note: r.note });
+          platState.set(p, { ok: true, note, count: idx.count, titles: idx.titles, deviceByTitle: idx.deviceByTitle, cached: allLocal });
+          syncNotes.push({ platform: p, note });
         } catch (e) {
           platState.set(p, {
             ok: false,
@@ -8488,6 +8516,7 @@ export const Actions = {
             count: 0,
             titles: new Set(),
             deviceByTitle: new Map(),
+            cached: false,
           });
         }
       }
@@ -8516,7 +8545,9 @@ export const Actions = {
               dealId: w.dealId,
               title: w.title,
               status: "verified",
-              note: "已在 Epic 官方游戏库中查到这款的手游权益（本次同步，库条目带手游标记）",
+              note: st.cached
+                ? "已在本地 Epic 游戏库查到这款的手游权益（无需重新同步，库条目带手游标记）"
+                : "已在 Epic 官方游戏库中查到这款的手游权益（本次同步，库条目带手游标记）",
               linkUrl: null,
             };
           }
@@ -8535,7 +8566,15 @@ export const Actions = {
           return { dealId: w.dealId, title: w.title, status: "unprocessed", note: "这款没有在队列里处理", linkUrl: null };
         }
         if (matched.length > 0) {
-          return { dealId: w.dealId, title: w.title, status: "verified", note: `已在 ${PLAT_LABEL[w.plat]} 官方游戏库中查到（本次同步）`, linkUrl: null };
+          return {
+            dealId: w.dealId,
+            title: w.title,
+            status: "verified",
+            note: st.cached
+              ? `已在本地 ${PLAT_LABEL[w.plat]} 游戏库查到（无需重新同步）`
+              : `已在 ${PLAT_LABEL[w.plat]} 官方游戏库中查到（本次同步）`,
+            linkUrl: null,
+          };
         }
         if (w.guided) {
           return {

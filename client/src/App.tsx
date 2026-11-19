@@ -917,10 +917,12 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
         const parts: string[] = [];
         if (r.claimed.length) parts.push(`新领取 ${r.claimed.length} 款`);
         if (owned.length) parts.push(`${owned.length} 款本来就在库中，已同步标记`);
-        if (r.failed.length) parts.push(`${r.failed.length} 款需手动`);
+        if (r.failed.length) parts.push(`${r.failed.length} 款自动领取失败，请点下方「去领取」在 Epic 官网手动完成`);
         setClaimNote(`✓ ${parts.join("；")}`);
       } else {
-        setClaimNote(r.total ? "自动领取未成功，请用下方官方领取页手动完成" : "未识别到可领取的项目");
+        setClaimNote(r.total
+          ? "Epic 自动下单未成功（可能是页面报错或需要验证码），请用下方「去领取」在官网手动完成"
+          : "未识别到可领取的项目");
       }
     });
   }, [deal.id, authToken, queryClient]);

@@ -1,6 +1,6 @@
 {
   "name": "fgame",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "private": true,
   "type": "module",
   "description": "FGame — 游戏 / 应用 / 云服务限免日报（iOS App + Web）",

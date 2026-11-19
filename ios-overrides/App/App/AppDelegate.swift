@@ -232,6 +232,13 @@ private func fgameClaimTopScript() -> String {
           var txt = (document.body && document.body.innerText || '').toLowerCase();
           if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
           if (txt.indexOf('already own') >= 0 || txt.indexOf('in library') >= 0) { ev('owned'); ACTIVE = false; return; }
+          // Epic sometimes returns its own error screen ("unknown error",
+          // "something went wrong", "an error occurred"). Don't spin forever:
+          // report it so native can show a clear manual-claim fallback.
+          if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
+              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
+            ev('error'); ACTIVE = false; return;
+          }
           var agree = document.querySelector('#agree') || document.querySelector('input[type=checkbox][id*=agree]');
           if (agree && !agree.checked && visible(agree)) { agree.click(); }
           var accepted = clickText('button', ['accept', 'i accept', 'yes, buy now', 'continue']);
@@ -281,6 +288,10 @@ private func fgameClaimFrameScript() -> String {
           var txt = (document.body && document.body.innerText || '').toLowerCase();
           if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
           if (txt.indexOf('captcha') >= 0 || txt.indexOf('challenge') >= 0) { ev('captcha'); ACTIVE = false; return; }
+          if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
+              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
+            ev('error'); ACTIVE = false; return;
+          }
           var accepted = clickText(['i accept', 'accept']);
           if (accepted) { ev('accepted'); return; }
           var placed = clickText(['place order', 'complete order', 'buy now']);
@@ -313,6 +324,10 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
     private var finished = false
     private var checkoutFrame: WKFrameInfo?
     private var frameInjectTimer: Timer?
+    /// Per-offer watchdog: if Epic's page never reaches success/owned/error
+    /// (e.g. an unrecognised page), advance instead of spinning forever.
+    private var offerWatchdog: Timer?
+    private var offerGeneration = 0
 
     init(offers: [FGameClaimOffer]) {
         self.offers = offers
@@ -389,10 +404,30 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
         if let p = view.viewWithTag(9101) as? UILabel { p.text = text }
     }
 
+    /// Cancel the watchdog for the current offer. Called on every terminal
+    /// step and on finish so a stale timer never advances twice.
+    private func cancelWatchdog() {
+        offerWatchdog?.invalidate()
+        offerWatchdog = nil
+        offerGeneration += 1
+    }
+
     private func loadCurrentOffer() {
+        cancelWatchdog()
         guard index < offers.count else { finish(); return }
         let offer = offers[index]
+        let gen = offerGeneration
         setProgress("领取 \(index + 1)/\(offers.count)：\(offer.title)")
+        // 25s per offer: enough for a slow 0-order, short enough to unstick.
+        offerWatchdog = Timer.scheduledTimer(withTimeInterval: 25, repeats: false) { [weak self] _ in
+            guard let self = self, self.offerGeneration == gen, !self.finished else { return }
+            if self.index < self.offers.count {
+                self.failed.append(self.offers[self.index].title)
+                self.index += 1
+            }
+            self.setProgress("超时，请手动领取")
+            self.loadCurrentOffer()
+        }
         let encoded = "1-\(offer.namespace)-\(offer.offerId)"
             .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "1-\(offer.namespace)-\(offer.offerId)"
         if let url = URL(string: "https://store.epicgames.com/purchase?offers=\(encoded)") {
@@ -407,6 +442,7 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
     private func finish() {
         guard !finished else { return }
         finished = true
+        cancelWatchdog()
         frameInjectTimer?.invalidate()
         frameInjectTimer = nil
         NotificationCenter.default.post(
@@ -436,6 +472,15 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
                 index += 1
                 checkoutFrame = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.loadCurrentOffer() }
+            } else if step == "error" || step == "captcha" {
+                // Epic returned its own error / captcha screen. Count it as
+                // failed so the front end can tell the user to claim manually,
+                // and move on instead of spinning on a dead page forever.
+                if index < offers.count { failed.append(offers[index].title) }
+                index += 1
+                checkoutFrame = nil
+                setProgress(step == "captcha" ? "需要验证码，请手动领取" : "Epic 返回错误，请手动领取")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.loadCurrentOffer() }
             }
             decisionHandler(.cancel)
             return
