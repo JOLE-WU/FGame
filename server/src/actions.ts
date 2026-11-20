@@ -3853,6 +3853,80 @@ async function readPlaytimeStatus(ctx: Ctx, userId: number): Promise<Record<stri
   return {};
 }
 
+/**
+ * LIGHTWEIGHT Epic ownership index for queue verification.
+ *
+ * Final验库 only needs to answer "is this given offer in the library?".
+ * The full syncEpicLibrary does far more: paginates the whole library,
+ * resolves every catalogItemId to a title via dozens of catalog requests,
+ * fetches playtime, then rewrites all ~774 rows one by one — ~86s measured
+ * on a real 1,050-record library. Almost all of that is wasted on验库.
+ *
+ * Epic's library records carry a stable `namespace` per product, and the
+ * free-game deals we verify store that SAME namespace in epic_offers
+ * (live-verified: 12 of 13 epic offers' namespace appears in the library;
+ * the one miss was a game genuinely not owned). Records also carry a
+ * `platform` array with "Android"/"IOS" for mobile entitlements, so a
+ * mobile claim can be distinguished from a PC-only copy of the same title.
+ *
+ * So for verification we only paginate records (~18s, an unavoidable hard
+ * cost — Epic has no per-namespace filter) and build a namespace→platforms
+ * set. No catalog lookups, no playtime, no DB writes. The caller matches
+ * each deal's epic_offers[].namespace against this set.
+ */
+async function fetchEpicOwnershipIndex(
+  token: string,
+): Promise<{ namespaces: Set<string>; mobileNamespaces: Set<string>; recordCount: number }> {
+  const namespaces = new Set<string>();
+  const mobileNamespaces = new Set<string>();
+  const platformsByNs = new Map<string, Set<string>>();
+  let cursor: string | null = null;
+  let recordCount = 0;
+  for (let page = 0; page < 60; page++) {
+    const pageUrl =
+      "https://library-service.live.use1a.on.epicgames.com/library/api/public/items?includeMetadata=true" +
+      (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+    const res = await fetch(pageUrl, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      const detail =
+        typeof errBody.errorMessage === "string" && errBody.errorMessage
+          ? errBody.errorMessage
+          : typeof errBody.errorCode === "string"
+            ? errBody.errorCode
+            : "";
+      throw new Error(`Epic 游戏库接口 HTTP ${res.status}${detail ? ` · ${detail}` : ""}`);
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    const pageRecords = Array.isArray(data.records) ? (data.records as Record<string, unknown>[]) : [];
+    recordCount += pageRecords.length;
+    for (const rec of pageRecords) {
+      const ns = typeof rec.namespace === "string" ? rec.namespace.toLowerCase() : "";
+      if (!ns) continue;
+      namespaces.add(ns);
+      let plats = platformsByNs.get(ns);
+      if (!plats) {
+        plats = new Set<string>();
+        platformsByNs.set(ns, plats);
+      }
+      const raw = Array.isArray(rec.platform) ? rec.platform : typeof rec.platform === "string" ? [rec.platform] : [];
+      for (const p of raw) {
+        if (typeof p !== "string") continue;
+        const v = p.toLowerCase();
+        plats.add(v.includes("android") || v.includes("ios") ? "mobile" : "pc");
+      }
+    }
+    const meta = (data.responseMetadata ?? data.responseMeta ?? {}) as Record<string, unknown>;
+    const next = typeof meta.nextCursor === "string" && meta.nextCursor ? meta.nextCursor : null;
+    if (!next || next === cursor) break;
+    cursor = next;
+  }
+  for (const [ns, plats] of platformsByNs) {
+    if (plats.has("mobile")) mobileNamespaces.add(ns);
+  }
+  return { namespaces, mobileNamespaces, recordCount };
+}
+
 async function syncEpicLibrary(ctx: Ctx, userId: number): Promise<{ count: number; note: string }> {
   const row = await getAccountRow(ctx, userId, "epic");
   if (!row || !row.accountRef) throw new Error("尚未绑定 Epic 账号");
@@ -8411,13 +8485,16 @@ export const Actions = {
         plat: Plat | null;
         unvNote: string | null;
         mobile: boolean;
+        // Epic namespace(s) from epic_offers — a stable product id that also
+        // appears in the official library records, enabling lightweight验库.
+        epicNs: string[];
       };
       const works: Work[] = [];
       for (const it of args.items) {
         const dealRows = await db.select().from(schema.deals).where(eq(schema.deals.id, it.dealId));
         const deal = dealRows[0];
         if (!deal) {
-          works.push({ dealId: it.dealId, guided: it.guided, title: `条目 #${it.dealId}`, keys: [], plat: null, unvNote: "这条限免已下架，无法验库", mobile: false });
+          works.push({ dealId: it.dealId, guided: it.guided, title: `条目 #${it.dealId}`, keys: [], plat: null, unvNote: "这条限免已下架，无法验库", mobile: false, epicNs: [] });
           continue;
         }
         let plat: Plat | null = null;
@@ -8431,6 +8508,17 @@ export const Actions = {
           if (gp === "epic" || gp === "steam" || gp === "gog") plat = gp;
           else unvNote = "这款的来源不在 Epic / Steam / GOG，没有可同步核对的官方游戏库，无法验库";
         }
+        let epicNs: string[] = [];
+        if (deal.epicOffers) {
+          try {
+            const offers = JSON.parse(deal.epicOffers) as Record<string, unknown>[];
+            epicNs = offers
+              .map((o) => (typeof o.namespace === "string" ? o.namespace.toLowerCase() : ""))
+              .filter((ns) => ns.length > 0);
+          } catch {
+            epicNs = [];
+          }
+        }
         works.push({
           dealId: deal.id,
           guided: it.guided,
@@ -8439,6 +8527,7 @@ export const Actions = {
           plat,
           unvNote,
           mobile: deal.externalId.startsWith("epic-mobile-"),
+          epicNs,
         });
       }
       // Incremental verification: a platform is only re-synced over the
@@ -8448,7 +8537,7 @@ export const Actions = {
       // instantly with zero network calls — only freshly-claimed items the
       // local copy doesn't know about trigger a full sync.
       const syncNotes: { platform: Plat; note: string }[] = [];
-      type PlatState = { ok: boolean; note: string; count: number; titles: Set<string>; deviceByTitle: Map<string, Set<string>>; cached: boolean };
+      type PlatState = { ok: boolean; note: string; count: number; titles: Set<string>; deviceByTitle: Map<string, Set<string>>; cached: boolean; lightweight?: boolean };
       const platState = new Map<Plat, PlatState>();
       const needed = [...new Set(works.map((w) => w.plat).filter((p): p is Plat => p != null))];
       const loadIndex = async (p: Plat) => {
@@ -8495,19 +8584,50 @@ export const Actions = {
         }
         try {
           // Read the local synced library first. If it already confirms every
-          // guided item of this platform, skip the expensive full sync.
+          // guided item of this platform, skip the network entirely.
           let idx = await loadIndex(p);
           const items = works.filter((w) => w.plat === p && w.guided);
           const allLocal = items.length > 0 && idx.count > 0 && items.every((w) => confirmedLocally(w, idx));
           let note: string;
           if (allLocal) {
             note = `${PLAT_LABEL[p]} ${items.length} 款均已在本地游戏库查到，跳过重新同步（上次同步 ${new Date(row.lastSyncAt ?? 0).toLocaleString()}）`;
+          } else if (p === "epic") {
+            // LIGHTWEIGHT Epic验库: the local copy can't confirm a freshly
+            // claimed game. Instead of a full syncEpicLibrary (~86s: catalog
+            // title resolution × hundreds + playtime + rewriting 774 rows),
+            // just paginate the library records (~18s) and match each deal's
+            // epic_offers[].namespace — a stable product id shared with the
+            // official library — plus the record's platform for mobile.
+            // Inject the verdict into idx as synthetic titles so the existing
+            // results pass below stays unchanged.
+            const token = await epicAccessToken(ctx, uid, row);
+            const own = await fetchEpicOwnershipIndex(token);
+            const titles = new Set<string>();
+            const deviceByTitle = new Map<string, Set<string>>();
+            let matchedCount = 0;
+            for (const w of works.filter((x) => x.plat === "epic")) {
+              const ownedNs = w.epicNs.filter((ns) => own.namespaces.has(ns));
+              if (ownedNs.length === 0) continue;
+              for (const k of w.keys) {
+                titles.add(k);
+                let devs = deviceByTitle.get(k);
+                if (!devs) {
+                  devs = new Set<string>();
+                  deviceByTitle.set(k, devs);
+                }
+                devs.add("pc");
+                if (ownedNs.some((ns) => own.mobileNamespaces.has(ns))) devs.add("mobile");
+              }
+              matchedCount++;
+            }
+            idx = { titles, deviceByTitle, count: own.recordCount };
+            note = `已核对 Epic 官方游戏库 ${own.recordCount} 条记录（按商品 namespace 精确匹配，未重建整库）；本次队列 ${matchedCount}/${items.length} 款在库`;
           } else {
             const r = await syncPlatform(ctx, uid, p);
             idx = await loadIndex(p);
             note = r.note;
           }
-          platState.set(p, { ok: true, note, count: idx.count, titles: idx.titles, deviceByTitle: idx.deviceByTitle, cached: allLocal });
+          platState.set(p, { ok: true, note, count: idx.count, titles: idx.titles, deviceByTitle: idx.deviceByTitle, cached: allLocal, lightweight: p === "epic" && !allLocal });
           syncNotes.push({ platform: p, note });
         } catch (e) {
           platState.set(p, {
@@ -8547,7 +8667,9 @@ export const Actions = {
               status: "verified",
               note: st.cached
                 ? "已在本地 Epic 游戏库查到这款的手游权益（无需重新同步，库条目带手游标记）"
-                : "已在 Epic 官方游戏库中查到这款的手游权益（本次同步，库条目带手游标记）",
+                : st.lightweight
+                  ? "已在 Epic 官方游戏库核对到这款的手游权益（按商品精确匹配，库记录带移动平台标记）"
+                  : "已在 Epic 官方游戏库中查到这款的手游权益（本次同步，库条目带手游标记）",
               linkUrl: null,
             };
           }
@@ -8558,8 +8680,10 @@ export const Actions = {
               status: "not_found",
               note:
                 matched.length > 0
-                  ? "同步到的 Epic 库里只有这款的 PC 版，没查到手游权益 — 手游版是否真领到以 Epic 账户交易页为准（下方链接），别把 PC 版当成手游已入库"
-                  : "已同步 Epic 游戏库没查到这款的手游权益 — 可能还没领成功、到账有延迟，或手游权益未出现在库同步里；是否真领到以 Epic 账户交易页为准（下方链接）",
+                  ? "Epic 库里只有这款的 PC 版，没查到手游权益 — 手游版是否真领到以 Epic 账户交易页为准（下方链接），别把 PC 版当成手游已入库"
+                  : st.lightweight
+                    ? "核对 Epic 官方游戏库没查到这款的手游权益 — 可能还没领成功、到账有延迟，或手游权益未出现在库里；是否真领到以 Epic 账户交易页为准（下方链接）"
+                    : "已同步 Epic 游戏库没查到这款的手游权益 — 可能还没领成功、到账有延迟，或手游权益未出现在库同步里；是否真领到以 Epic 账户交易页为准（下方链接）",
               linkUrl: EPIC_TRANSACTIONS_URL,
             };
           }
@@ -8572,7 +8696,9 @@ export const Actions = {
             status: "verified",
             note: st.cached
               ? `已在本地 ${PLAT_LABEL[w.plat]} 游戏库查到（无需重新同步）`
-              : `已在 ${PLAT_LABEL[w.plat]} 官方游戏库中查到（本次同步）`,
+              : st.lightweight
+                ? `已在 Epic 官方游戏库核对到这款（按商品精确匹配）`
+                : `已在 ${PLAT_LABEL[w.plat]} 官方游戏库中查到（本次同步）`,
             linkUrl: null,
           };
         }
@@ -8581,7 +8707,9 @@ export const Actions = {
             dealId: w.dealId,
             title: w.title,
             status: "not_found",
-            note: `已同步 ${PLAT_LABEL[w.plat]} 游戏库（${st.count} 款）没查到这款 — 可能还没在官方页领成功，或领取到账有延迟；稍后在「我的」里再同步一次游戏库复查`,
+            note: st.lightweight
+              ? `核对 Epic 官方游戏库（${st.count} 条记录）没查到这款 — 可能还没在官方页领成功，或领取到账有延迟；稍后在「我的」里再同步一次游戏库复查`
+              : `已同步 ${PLAT_LABEL[w.plat]} 游戏库（${st.count} 款）没查到这款 — 可能还没在官方页领成功，或领取到账有延迟；稍后在「我的」里再同步一次游戏库复查`,
             linkUrl: null,
           };
         }
