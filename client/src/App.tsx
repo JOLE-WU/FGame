@@ -376,6 +376,28 @@ function platformZh(raw: string): string {
   return s;
 }
 
+/**
+ * 是否来自 Epic 的限免（含手游）。Epic 官方手游 epicMobile / gamePlatform
+ * 能直接判定；GamerPower 镜像的手游限免（如 Lonesome Village (Mobile)）
+ * 数据层没归到 epic，但领取说明里写明了 Epic Games Store，这里一并认出，
+ * 好让列表卡片能挂上 Epic 来源标签，而不是只显示安卓/iOS。
+ */
+function isEpicGiveaway(deal: Deal): boolean {
+  if (deal.gamePlatform === "epic" || deal.epicMobile) return true;
+  if (deal.epicOffers.length > 0) return true;
+  const note = `${deal.instructions ?? ""} ${deal.instructionsZh ?? ""}`;
+  return /epic games store|epic 手游|epic 商城|epic games/i.test(note);
+}
+/** 平台文案里是否已经带了 Epic 字样（避免重复挂 Epic 胶囊）。 */
+function platLineHasEpic(deal: Deal): boolean {
+  return /epic/i.test(`${deal.platform ?? ""} ${categoryLabel(deal)}`);
+}
+/** 限免卡片上需要补一个 Epic 来源标签：Epic 手游，但平台文案没写 Epic。 */
+function showEpicBadge(deal: Deal): boolean {
+  if (!isEpicGiveaway(deal) || platLineHasEpic(deal)) return false;
+  return deal.epicMobile || deal.tags.includes("ios") || /android|ios/i.test(deal.platform);
+}
+
 function categoryLabel(deal: Deal): string {
   if (deal.tags.includes("ai")) return "AI 免费额度";
   if (deal.tags.includes("cloud")) return "云服务";
@@ -574,6 +596,11 @@ const MiniRow = memo(function MiniRow({
         <h4 className="truncate text-[13px] font-bold leading-[1.3] text-[var(--text)]">{title}</h4>
         <div className="mb-2 mt-[5px] flex items-center gap-1.5">
           <p className="min-w-0 truncate font-mono text-[9.5px] tracking-[0.03em] text-[var(--dim2)]">{platLine}</p>
+          {showEpicBadge(deal) ? (
+            <span className="flex-none rounded-full border border-[var(--accent)] bg-[var(--accent-soft)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--accent)]">
+              Epic
+            </span>
+          ) : null}
           {deal.epicMobile ? (
             <span className="flex-none rounded-full bg-[var(--free-bg)] px-1.5 py-[2px] text-[9px] font-bold leading-none text-[var(--free-ink)]">
               手游版 {deal.mobilePlatforms.map((p) => (p === "android" ? "安卓" : "iOS")).join("/")}
@@ -796,6 +823,11 @@ function HeroCard({ deal, now, onOpen }: { deal: Deal; now: number; onOpen: (dea
           {deal.platform ? (
             <span className="border border-[var(--border)] px-[7px] py-[5px] font-mono text-[9.5px] uppercase leading-none text-[var(--dim)]">
               {platformZh(deal.platform)}
+            </span>
+          ) : null}
+          {showEpicBadge(deal) ? (
+            <span className="border border-[var(--accent)] bg-[var(--accent-soft)] px-[7px] py-[5px] font-mono text-[9.5px] font-bold leading-none text-[var(--accent)]">
+              Epic
             </span>
           ) : null}
           {deal.epicMobile ? (
@@ -2758,8 +2790,111 @@ function RegionAppSheet({
  * Apple 给每个 App 一个全局 trackId，但标题会按区本地化，所以行里带上该区自己的名字，
  * 名称对不上时用 bundleId / 标题匹配补位，并标出「本地发行版」。
  */
-/** 国/印/日/美是主流比价口径，列表里着重标出来，扫一眼就能定位。 */
-const PRICE_FOCUS_REGIONS = new Set(["cn", "in", "jp", "us"]);
+/** 默认着重高亮的区：国/印/日/美是主流比价口径，扫一眼就能定位。用户可在标题行下拉里自行勾选。 */
+const PRICE_FOCUS_DEFAULT = ["cn", "in", "jp", "us"];
+const PRICE_FOCUS_KEY = "fgame-price-focus-regions";
+function loadPriceFocus(): Set<string> {
+  try {
+    const raw = localStorage.getItem(PRICE_FOCUS_KEY);
+    if (raw == null) return new Set(PRICE_FOCUS_DEFAULT);
+    const v: unknown = JSON.parse(raw);
+    if (Array.isArray(v)) return new Set(v.filter((x): x is string => typeof x === "string" && x in PRICE_REGION_LABEL));
+    return new Set(PRICE_FOCUS_DEFAULT);
+  } catch {
+    return new Set(PRICE_FOCUS_DEFAULT);
+  }
+}
+function savePriceFocus(set: Set<string>) {
+  try { localStorage.setItem(PRICE_FOCUS_KEY, JSON.stringify([...set])); } catch { /* 隐私模式忽略 */ }
+}
+
+/** 标题行右侧的「高亮区」多选下拉：勾选的区在价格表里着重显示。 */
+function RegionFocusPicker({
+  selected,
+  available,
+  onToggle,
+  onReset,
+}: {
+  selected: Set<string>;
+  available: string[];
+  onToggle: (cc: string) => void;
+  onReset: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: PointerEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", onDoc);
+    return () => document.removeEventListener("pointerdown", onDoc);
+  }, [open]);
+  // 当前这批有价格的区优先列出，再补上对照表里其余的区，方便预先勾选。
+  const codes = [...new Set([...available, ...Object.keys(PRICE_REGION_LABEL)])];
+  return (
+    <div className="relative" ref={boxRef} data-focus-picker>
+      <button
+        type="button"
+        aria-label="选择要着重高亮的区"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1 rounded-full border px-[9px] py-[4px] text-[10px] font-bold leading-none transition-colors ${
+          open ? "border-[var(--accent)] text-[var(--accent)]" : "border-[var(--border)] bg-[var(--surface2)] text-[var(--dim)]"
+        }`}
+      >
+        高亮区
+        {selected.size ? <span className="font-mono">{selected.size}</span> : null}
+        <svg viewBox="0 0 12 12" className={`h-[9px] w-[9px] transition-transform ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+          <path d="M2.5 4.5 6 8l3.5-3.5" />
+        </svg>
+      </button>
+      {open ? (
+        <div
+          className="absolute right-0 top-[calc(100%+6px)] z-40 w-[248px] rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-2 shadow-[var(--glass-hi)] backdrop-blur-xl"
+          data-focus-menu
+        >
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-[10px] font-bold text-[var(--dim2)]">勾选要着重高亮的区</span>
+          </div>
+          <div className="grid max-h-[240px] grid-cols-2 gap-0.5 overflow-y-auto">
+            {codes.map((cc) => {
+              const on = selected.has(cc);
+              return (
+                <button
+                  key={cc}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={on}
+                  data-focus-code={cc}
+                  onClick={() => onToggle(cc)}
+                  className={`flex items-center gap-1.5 rounded-[8px] px-1.5 py-[6px] text-left text-[11px] transition-colors ${
+                    on ? "bg-[var(--accent)]/[0.08] text-[var(--accent)]" : "text-[var(--text)]"
+                  }`}
+                >
+                  <span className={`flex h-[13px] w-[13px] flex-none items-center justify-center rounded-[3px] border ${
+                    on ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border)]"
+                  }`}>
+                    {on ? (
+                      <svg viewBox="0 0 12 12" className="h-[9px] w-[9px]" fill="none" stroke="var(--accent-ink)" strokeWidth="2" aria-hidden="true">
+                        <path d="M2.5 6.2 5 8.6 9.5 3.6" />
+                      </svg>
+                    ) : null}
+                  </span>
+                  <span className="truncate">{PRICE_REGION_LABEL[cc] ?? cc.toUpperCase()}</span>
+                </button>
+              );
+            })}
+          </div>
+          <div className="mt-1.5 flex items-center gap-2 border-t border-[var(--border)] px-1 pt-2">
+            <button type="button" onClick={onReset} className="text-[10px] font-bold text-[var(--accent)]">恢复默认</button>
+            <span className="ml-auto text-[9px] text-[var(--dim2)]">选择会保存</span>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function RegionPriceCompare({
   trackId,
@@ -2782,6 +2917,16 @@ function RegionPriceCompare({
   // 「本体 | 内购」不像以前那样上下叠两块表，改成标题行右侧的切换：
   // 同一块位置切两种口径，手机上少滚一屏。
   const [priceView, setPriceView] = useState<"base" | "iap">("base");
+  // 用户可勾选要着重高亮的区（默认国/印/日/美），选择记在本地。
+  const [focusRegions, setFocusRegions] = useState<Set<string>>(loadPriceFocus);
+  const toggleFocus = (cc: string) => {
+    setFocusRegions((prev) => {
+      const next = new Set(prev);
+      if (next.has(cc)) next.delete(cc); else next.add(cc);
+      savePriceFocus(next);
+      return next;
+    });
+  };
   const rows = (query.data?.prices ?? [])
     .map((p) => {
       const rate = rateFor(rates, p.currency, p.cc);
@@ -2807,12 +2952,20 @@ function RegionPriceCompare({
     <section className="mt-6" data-region-prices data-price-view={priceView}>
       <div className="mb-2 flex items-center gap-2">
         <h2 className="flex-none text-[13px] font-bold leading-none text-[var(--text)]">各区价格对比</h2>
+        {/* 右侧：高亮区下拉 + 口径切换（本体 / 内购），一组对齐。 */}
+        <div className="ml-auto flex flex-none items-center gap-1.5">
+        <RegionFocusPicker
+          selected={focusRegions}
+          available={rows.map((r) => r.cc)}
+          onToggle={toggleFocus}
+          onReset={() => { setFocusRegions(new Set(PRICE_FOCUS_DEFAULT)); savePriceFocus(new Set(PRICE_FOCUS_DEFAULT)); }}
+        />
         {/* 口径切换：本体价 / 内购起价，位置就在标题右侧这块空白。 */}
         <div
           role="tablist"
           aria-label="价格对比口径"
           data-price-switch
-          className="ml-auto flex flex-none items-center gap-[2px] rounded-full border border-[var(--border)] bg-[var(--surface2)] p-[2px]"
+          className="flex flex-none items-center gap-[2px] rounded-full border border-[var(--border)] bg-[var(--surface2)] p-[2px]"
         >
           {([
             ["base", "本体"],
@@ -2833,10 +2986,11 @@ function RegionPriceCompare({
             </button>
           ))}
         </div>
+        </div>
       </div>
       {priceView === "iap" ? (
         withPrice.length ? (
-          <IapPriceCompare trackId={trackId} rows={withPrice} rates={rates} onOpenRegion={onOpenRegion} />
+          <IapPriceCompare trackId={trackId} rows={withPrice} rates={rates} focusRegions={focusRegions} onOpenRegion={onOpenRegion} />
         ) : (
           <p className="rounded-[16px] border border-[var(--border)] bg-[var(--surface)] px-3 py-6 text-center text-[12px] text-[var(--dim)]">
             正在读取各区价格…
@@ -2856,7 +3010,7 @@ function RegionPriceCompare({
             {withPrice.map((r, i) => {
               const isLow = cheapest != null && r.cc === cheapest.cc && r.cny != null && r.cny > 0;
               const renamedHere = !sameTitle(r.name, currentName);
-              const focused = PRICE_FOCUS_REGIONS.has(r.cc);
+              const focused = focusRegions.has(r.cc);
               return (
                 <button
                   key={r.cc}
@@ -2947,11 +3101,13 @@ function IapPriceCompare({
   trackId,
   rows,
   rates,
+  focusRegions,
   onOpenRegion,
 }: {
   trackId: number;
   rows: { cc: string; currency: string; formattedPrice: string | null; price: number | null }[];
   rates: Record<string, number> | null;
+  focusRegions: Set<string>;
   onOpenRegion: (row: RegionPriceRow) => void;
 }) {
   const query = useQuery({
@@ -2997,7 +3153,7 @@ function IapPriceCompare({
             <span className="w-[11px] flex-none" />
           </div>
           {readable.map(({ r, iap, cny }, i) => {
-            const focused = PRICE_FOCUS_REGIONS.has(r.cc);
+            const focused = focusRegions.has(r.cc);
             const sameCcy = (iap?.currency ?? "").toUpperCase() === "CNY";
             return (
               <button
@@ -5240,8 +5396,366 @@ function CloudCard({ deal, now, onOpen }: { deal: Deal; now: number; onOpen: (de
   );
 }
 
-function CloudPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Deal[]; now: number; onOpen: (d: Deal) => void; hideClaimed: boolean; hideHidden: boolean }) {
+// ---------- 订阅追踪：云服务页入口卡片 + 二级页 ----------
+type Subscription = {
+  id: string;
+  name: string;
+  initial: string;
+  color: string;
+  region: string;
+  plan: string;
+  price: number;
+  currency: string;
+  billingDay: number | null;
+  autoRenew: boolean;
+  standalone: number | null; // 单买原价（本币），算「比单独订阅省多少」
+};
+
+const SUB_KEY = "fgame-subscriptions";
+// 首次进入给一组示例订阅，打开就能看到「本月订阅」的样子，之后完全由用户增删改。
+const DEFAULT_SUBSCRIPTIONS: Subscription[] = [
+  { id: "sub-netflix", name: "Netflix", initial: "N", color: "#E50914", region: "us", plan: "高级版", price: 15.49, currency: "USD", billingDay: 14, autoRenew: true, standalone: 22 },
+  { id: "sub-spotify", name: "Spotify", initial: "S", color: "#1DB954", region: "hk", plan: "家庭版", price: 44, currency: "HKD", billingDay: 21, autoRenew: true, standalone: null },
+  { id: "sub-icloud", name: "iCloud+", initial: "i", color: "#3b82f6", region: "cn", plan: "2TB · 与家人共享", price: 6, currency: "CNY", billingDay: 21, autoRenew: true, standalone: null },
+  { id: "sub-yt", name: "YouTube Premium", initial: "Y", color: "#FF0033", region: "in", plan: "个人版", price: 129, currency: "INR", billingDay: 3, autoRenew: true, standalone: null },
+  { id: "sub-chatgpt", name: "ChatGPT Plus", initial: "C", color: "#10A37F", region: "us", plan: "", price: 20, currency: "USD", billingDay: 8, autoRenew: true, standalone: null },
+  { id: "sub-applemusic", name: "Apple Music", initial: "A", color: "#FA57C1", region: "cn", plan: "学生版", price: 6, currency: "CNY", billingDay: null, autoRenew: false, standalone: null },
+];
+const SUB_REGION_LABEL: Record<string, string> = {
+  cn: "国区", us: "美区", hk: "港区", tw: "中国台湾", jp: "日区", kr: "韩区",
+  in: "印度区", sg: "新加坡区", gb: "英区", ca: "加区", au: "澳区", tr: "土耳其区",
+};
+const SUB_CURRENCIES = ["CNY", "USD", "HKD", "JPY", "INR", "GBP", "KRW", "SGD", "TWD", "AUD", "EUR", "CAD"];
+const SUB_COLORS = ["#E50914", "#1DB954", "#3b82f6", "#FF0033", "#10A37F", "#FA57C1", "#f59e0b", "#8b5cf6", "#64748b"];
+
+function loadSubscriptions(): Subscription[] {
+  try {
+    const raw = localStorage.getItem(SUB_KEY);
+    if (raw == null) return DEFAULT_SUBSCRIPTIONS;
+    const v: unknown = JSON.parse(raw);
+    if (Array.isArray(v)) {
+      return v
+        .filter((x): x is Subscription => !!x && typeof x === "object" && typeof (x as Subscription).id === "string" && typeof (x as Subscription).name === "string")
+        .map((x) => ({
+          ...x,
+          color: typeof x.color === "string" ? x.color : SUB_COLORS[0]!,
+          region: typeof x.region === "string" ? x.region : "us",
+          currency: typeof x.currency === "string" ? x.currency : "USD",
+          plan: typeof x.plan === "string" ? x.plan : "",
+          price: Number.isFinite(x.price) ? x.price : 0,
+          billingDay: x.billingDay == null ? null : Math.min(31, Math.max(1, Number(x.billingDay) || 1)),
+          autoRenew: x.autoRenew !== false,
+          standalone: x.standalone == null ? null : Number(x.standalone),
+          initial: typeof x.initial === "string" && x.initial ? x.initial : x.name.slice(0, 1).toUpperCase(),
+        }));
+    }
+    return DEFAULT_SUBSCRIPTIONS;
+  } catch {
+    return DEFAULT_SUBSCRIPTIONS;
+  }
+}
+function saveSubscriptions(list: Subscription[]) {
+  try { localStorage.setItem(SUB_KEY, JSON.stringify(list)); } catch { /* 隐私模式忽略 */ }
+}
+function subCny(sub: Subscription, rates: Record<string, number> | null): number {
+  const rate = rateFor(rates, sub.currency, sub.region) ?? 1;
+  return rate > 0 ? sub.price / rate : sub.price;
+}
+function subRegionLabel(cc: string): string {
+  return SUB_REGION_LABEL[cc] ?? cc.toUpperCase();
+}
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
+}
+/** 下一个扣费日：过了本月 this 号就顺延到下月，31 号遇小月取当月最后一天。 */
+function nextBillingDate(day: number, now: Date): Date {
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const d = new Date(y, m, Math.min(day, daysInMonth(y, m)));
+  if (d.getTime() < new Date(y, m, now.getDate()).getTime()) {
+    return new Date(y, m + 1, Math.min(day, daysInMonth(y, m + 1)));
+  }
+  return d;
+}
+
+/** 云服务页顶部的「订阅追踪」入口卡：本月订阅总额 + 项数 + 省多少 + 柱状图装饰。 */
+function SubscriptionEntryCard({
+  subs,
+  rates,
+  onOpen,
+}: {
+  subs: Subscription[];
+  rates: Record<string, number> | null;
+  onOpen: () => void;
+}) {
+  const total = subs.reduce((s, x) => s + subCny(x, rates), 0);
+  const saved = subs.reduce((s, x) => {
+    if (x.standalone == null) return s;
+    const rate = rateFor(rates, x.currency, x.region) ?? 1;
+    return s + (x.standalone > x.price ? (x.standalone - x.price) / (rate || 1) : 0);
+  }, 0);
+  return (
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`管理我的订阅，本月订阅约 ${cnyAmount(total)} 元，共 ${subs.length} 项`}
+      data-subscription-entry
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      className="relative cursor-pointer overflow-hidden rounded-[18px] border border-[var(--border)] bg-[var(--surface)] p-4 shadow-[var(--glass-hi)] backdrop-blur-md transition-colors active:opacity-80"
+      style={{ background: "linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%)" }}
+    >
+      <div className="flex items-center gap-2 font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">
+        <span className="text-[var(--accent)]">01 /</span> MY SUBSCRIPTIONS
+        <span className="ml-auto flex items-center gap-0.5 text-[var(--dim)]">管理 <span aria-hidden>›</span></span>
+      </div>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-1.5">
+            <span className="font-mono text-[12px] font-semibold text-[var(--dim)]">¥</span>
+            <span className="font-serif text-[38px] font-black leading-none tracking-tight text-[var(--text)]">{cnyAmount(total)}</span>
+          </div>
+          <p className="mt-2 text-[11px] text-[var(--dim2)]">
+            {subs.length} 项服务{saved > 0 ? ` · 比单独订阅省 ¥${cnyAmount(saved)}` : ""}
+          </p>
+        </div>
+        <div className="flex h-11 flex-none items-end gap-[3px] opacity-70" aria-hidden="true">
+          {[9, 16, 12, 22, 15, 28, 19].map((h, i) => (
+            <span key={i} className="w-[4px] rounded-t-[2px] bg-grad" style={{ height: `${h}px`, opacity: 0.35 + i * 0.09 }} />
+          ))}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/** 订阅编辑弹层（新增 / 编辑），复用全屏 portal。 */
+function SubscriptionEditor({
+  initial,
+  onSave,
+  onDelete,
+  onClose,
+}: {
+  initial: Subscription | null;
+  onSave: (s: Subscription) => void;
+  onDelete: ((id: string) => void) | null;
+  onClose: () => void;
+}) {
+  const blank: Subscription = {
+    id: `sub-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    name: "", initial: "", color: SUB_COLORS[0]!, region: "us", plan: "",
+    price: 0, currency: "USD", billingDay: 1, autoRenew: true, standalone: null,
+  };
+  const [form, setForm] = useState<Subscription>(initial ? { ...initial } : blank);
+  const set = <K extends keyof Subscription>(k: K, v: Subscription[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const canSave = form.name.trim().length > 0 && Number.isFinite(form.price) && form.price >= 0;
+  const submit = () => {
+    if (!canSave) return;
+    onSave({
+      ...form,
+      name: form.name.trim(),
+      initial: (form.initial.trim() || form.name.trim().slice(0, 1).toUpperCase()),
+    });
+  };
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60" role="dialog" aria-modal="true" aria-label={initial ? "编辑订阅" : "添加订阅"} onClick={onClose}>
+      <div className="w-full max-w-3xl rounded-t-[20px] border-t border-[var(--border)] bg-[var(--surface)] px-5 pb-8 pt-4 shadow-[var(--glass-hi)]" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="font-serif text-[18px] font-bold text-[var(--text)]">{initial ? "编辑订阅" : "添加订阅"}</h3>
+          <button type="button" aria-label="关闭" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] text-[var(--dim)]">✕</button>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="col-span-2 block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">服务名称</span>
+            <input value={form.name} onChange={(e) => set("name", e.target.value)} placeholder="如 Netflix" className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">区服</span>
+            <select value={form.region} onChange={(e) => { const cc = e.target.value; set("region", cc); if (CC_CURRENCY[cc]) set("currency", CC_CURRENCY[cc]!); }} className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none">
+              {Object.entries(SUB_REGION_LABEL).map(([cc, label]) => <option key={cc} value={cc}>{label}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">套餐 / 备注</span>
+            <input value={form.plan} onChange={(e) => set("plan", e.target.value)} placeholder="如 家庭版" className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">价格（本币）</span>
+            <input type="number" min="0" step="0.01" value={form.price} onChange={(e) => set("price", Number(e.target.value))} className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">币种</span>
+            <select value={form.currency} onChange={(e) => set("currency", e.target.value)} className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none">
+              {SUB_CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">每月扣费日</span>
+            <input type="number" min="1" max="31" value={form.billingDay ?? ""} onChange={(e) => set("billingDay", e.target.value === "" ? null : Math.min(31, Math.max(1, Number(e.target.value))))} placeholder="不自动扣费则留空" className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">单买原价（可选）</span>
+            <input type="number" min="0" step="0.01" value={form.standalone ?? ""} onChange={(e) => set("standalone", e.target.value === "" ? null : Number(e.target.value))} placeholder="用于算省多少" className="w-full rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2 text-[13px] text-[var(--text)] outline-none focus:border-[var(--accent)]" />
+          </label>
+          <div className="col-span-2 flex items-center justify-between rounded-[10px] border border-[var(--border)] bg-[var(--surface2)] px-3 py-2">
+            <span className="text-[12px] font-bold text-[var(--text)]">自动续费</span>
+            <button type="button" role="switch" aria-checked={form.autoRenew} onClick={() => set("autoRenew", !form.autoRenew)} className={`relative h-[22px] w-[40px] rounded-full transition-colors ${form.autoRenew ? "bg-grad" : "bg-[var(--border)]"}`}>
+              <span className={`absolute top-[3px] h-4 w-4 rounded-full bg-white transition-all ${form.autoRenew ? "left-[21px]" : "left-[3px]"}`} />
+            </button>
+          </div>
+          <div className="col-span-2">
+            <span className="mb-1 block text-[10px] font-bold text-[var(--dim2)]">标识色</span>
+            <div className="flex flex-wrap gap-2">
+              {SUB_COLORS.map((c) => (
+                <button key={c} type="button" aria-label={`选择颜色 ${c}`} onClick={() => set("color", c)} className={`h-6 w-6 rounded-full border-2 ${form.color === c ? "border-[var(--accent)]" : "border-transparent"}`} style={{ background: c }} />
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className="mt-5 flex items-center gap-3">
+          {onDelete ? (
+            <button type="button" onClick={() => onDelete(form.id)} className="rounded-full border border-[var(--warn)] px-4 py-2 text-[12px] font-bold text-[var(--warn)]">删除</button>
+          ) : null}
+          <button type="button" onClick={submit} disabled={!canSave} className="ml-auto rounded-full bg-grad px-6 py-2 text-[13px] font-bold text-[var(--accent-ink)] disabled:opacity-40">保存</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** 订阅追踪二级页：01 本月订阅 / 02 订阅中的服务 / 03 即将扣费。 */
+function SubscriptionPage({
+  rates,
+  now,
+  onClose,
+}: {
+  rates: Record<string, number> | null;
+  now: number;
+  onClose: () => void;
+}) {
+  const swipe = useRankingSwipeBack(onClose);
+  const [subs, setSubs] = useState<Subscription[]>(loadSubscriptions);
+  const [editing, setEditing] = useState<Subscription | null | undefined>(undefined);
+  useEffect(() => { saveSubscriptions(subs); }, [subs]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && editing === undefined) onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, editing]);
+
+  const total = subs.reduce((s, x) => s + subCny(x, rates), 0);
+  const saved = subs.reduce((s, x) => {
+    if (x.standalone == null) return s;
+    const rate = rateFor(rates, x.currency, x.region) ?? 1;
+    return s + (x.standalone > x.price ? (x.standalone - x.price) / (rate || 1) : 0);
+  }, 0);
+  const today = new Date(now);
+  const upcoming = subs
+    .filter((x) => x.autoRenew && x.billingDay != null)
+    .map((x) => ({ sub: x, date: nextBillingDate(x.billingDay!, today) }))
+    .map((x) => ({ ...x, days: Math.round((x.date.getTime() - new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime()) / 86400000) }))
+    .filter((x) => x.days <= 7)
+    .sort((a, b) => a.days - b.days);
+
+  const upsert = (s: Subscription) => {
+    setSubs((list) => {
+      const i = list.findIndex((x) => x.id === s.id);
+      if (i < 0) return [...list, s];
+      const next = [...list]; next[i] = s; return next;
+    });
+    setEditing(undefined);
+  };
+  const remove = (id: string) => { setSubs((list) => list.filter((x) => x.id !== id)); setEditing(undefined); };
+
+  return createPortal(
+    <div className="v-scroll-only fixed inset-0 z-40" role="dialog" aria-modal="true" aria-label="订阅追踪" data-subscription-page {...swipe.handlers} style={swipe.style}>
+      <SafeAreaTopScrim backgroundColor="var(--bg)" />
+      <div className="sticky top-0 z-10 border-b border-[var(--border)] bg-[var(--bg)]/90 backdrop-blur-md">
+        <div className="mx-auto flex w-full max-w-3xl items-center gap-3 px-4 py-3">
+          <button type="button" onClick={onClose} aria-label="返回云服务" className="flex h-9 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface)] px-3 text-[12px] font-bold text-[var(--text)]">← 返回</button>
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--dim2)]">SUBSCRIPTIONS</span>
+          <button type="button" onClick={() => setEditing(null)} aria-label="添加订阅" className="ml-auto rounded-full bg-grad px-3 py-[7px] text-[11px] font-bold text-[var(--accent-ink)]">＋ 添加</button>
+        </div>
+      </div>
+      <div className="mx-auto w-full max-w-3xl px-[22px] pb-12 pt-6">
+        {/* 01 本月订阅 */}
+        <div className="flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--dim2)]"><span className="text-[var(--accent)]">01 /</span> 本月订阅 <span className="text-[var(--dim2)]">THIS MONTH</span></div>
+        <div className="mt-3 rounded-[18px] border border-[var(--border)] bg-[var(--surface)] p-5 shadow-[var(--glass-hi)]" style={{ background: "linear-gradient(135deg, var(--surface) 0%, var(--surface2) 100%)" }}>
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <div className="flex items-baseline gap-1.5"><span className="font-mono text-[14px] font-semibold text-[var(--dim)]">¥</span><span className="font-serif text-[42px] font-black leading-none text-[var(--text)]">{cnyAmount(total)}</span></div>
+              <p className="mt-2 text-[11px] text-[var(--dim2)]">{subs.length} 项服务{saved > 0 ? ` · 比单独订阅省 ¥${cnyAmount(saved)}` : ""}</p>
+            </div>
+            <div className="flex h-12 flex-none items-end gap-[3px] opacity-70" aria-hidden="true">
+              {[9, 16, 12, 22, 15, 28, 19].map((h, i) => <span key={i} className="w-[4px] rounded-t-[2px] bg-grad" style={{ height: `${h}px`, opacity: 0.35 + i * 0.09 }} />)}
+            </div>
+          </div>
+        </div>
+
+        {/* 02 订阅中的服务 */}
+        <div className="mt-7 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--dim2)]"><span className="text-[var(--accent)]">02 /</span> 订阅中的服务 <span className="text-[var(--dim2)]">ACTIVE</span></div>
+        <div className="mt-3 overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
+          {subs.length ? subs.map((x, i) => {
+            const cny = subCny(x, rates);
+            const meta = [subRegionLabel(x.region), x.plan, x.billingDay != null ? `每月 ${x.billingDay} 日续费` : "无扣费日"].filter(Boolean).join(" · ");
+            return (
+              <button key={x.id} type="button" onClick={() => setEditing(x)} aria-label={`编辑订阅 ${x.name}`} className={`flex w-full items-center gap-3 px-3 py-[11px] text-left ${i ? "border-t border-[var(--border)]" : ""} active:opacity-70`}>
+                <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[11px] text-[17px] font-black text-white" style={{ background: x.color }}>{x.initial}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[12.5px] font-bold text-[var(--text)]">{x.name}</span>
+                    {x.autoRenew ? <span className="h-[6px] w-[6px] flex-none rounded-full bg-[#22c55e]" aria-label="自动续费中" /> : null}
+                  </span>
+                  <span className="mt-[3px] block truncate text-[10px] text-[var(--dim2)]">{x.autoRenew ? meta : `${subRegionLabel(x.region)}${x.plan ? ` · ${x.plan}` : ""} · 已关闭自动续费`}</span>
+                </span>
+                <span className="flex-none text-right">
+                  <span className="block font-mono text-[12px] font-bold text-[var(--text)]">¥{cnyAmount(cny)}<span className="text-[9px] font-medium text-[var(--dim2)]">/月</span></span>
+                  {x.currency !== "CNY" ? <span className="block font-mono text-[9px] text-[var(--dim2)]">{x.currency} {x.price}</span> : null}
+                </span>
+              </button>
+            );
+          }) : <p className="px-3 py-6 text-center text-[11px] text-[var(--dim2)]">还没有订阅，点右上「＋ 添加」录入</p>}
+        </div>
+
+        {/* 03 即将扣费 */}
+        <div className="mt-7 flex items-center gap-2 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--dim2)]"><span className="text-[var(--accent)]">03 /</span> 即将扣费 <span className="text-[var(--dim2)]">UPCOMING</span></div>
+        <div className="mt-3 overflow-hidden rounded-[16px] border border-[var(--border)] bg-[var(--surface)] shadow-[var(--glass-hi)]">
+          {upcoming.length ? upcoming.map(({ sub: x, date, days }, i) => (
+            <button key={x.id} type="button" onClick={() => setEditing(x)} className={`flex w-full items-center gap-3 px-3 py-[11px] text-left ${i ? "border-t border-[var(--border)]" : ""} active:opacity-70`}>
+              <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-[11px] text-[16px] font-black text-white" style={{ background: x.color }}>{x.initial}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[12.5px] font-bold text-[var(--text)]">{x.name}</span>
+                <span className="mt-[3px] block truncate text-[10px] text-[var(--dim2)]">{date.getMonth() + 1}月{date.getDate()}日 · {x.plan || "自动续费"}{days === 0 ? " · 今天" : ""}</span>
+              </span>
+              <span className="flex-none font-mono text-[12px] font-bold text-[var(--warn)]">¥{cnyAmount(subCny(x, rates))}</span>
+            </button>
+          )) : <p className="px-3 py-6 text-center text-[11px] text-[var(--dim2)]">未来 7 天没有待扣费的订阅</p>}
+        </div>
+        <p className="mt-4 text-center font-mono text-[9px] leading-relaxed text-[var(--dim2)]">价格按当前汇率折算成人民币，仅供参考 · 实际扣费以各订阅平台账单为准</p>
+      </div>
+      {editing !== undefined ? (
+        <SubscriptionEditor
+          initial={editing}
+          onSave={upsert}
+          onDelete={editing ? remove : null}
+          onClose={() => setEditing(undefined)}
+        />
+      ) : null}
+    </div>,
+    document.body,
+  );
+}
+
+function CloudPage({
+  deals, now, onOpen, hideClaimed, hideHidden, onOpenSubscriptions,
+}: {
+  deals: Deal[]; now: number; onOpen: (d: Deal) => void; hideClaimed: boolean; hideHidden: boolean;
+  onOpenSubscriptions: () => void;
+}) {
   const [chip, setChip] = useState<"all" | "cloud" | "ai">("all");
+  const subs = useMemo(loadSubscriptions, []);
+  const subRates = useCnyRates(true);
   const list = useMemo(
     () =>
       deals.filter(
@@ -5258,11 +5772,16 @@ function CloudPage({ deals, now, onOpen, hideClaimed, hideHidden }: { deals: Dea
         <h1 className="font-serif text-[26px] font-black leading-none text-[var(--text)]">云服务</h1>
         <span className="font-mono text-[9px] font-semibold uppercase tracking-[0.2em] text-[var(--dim2)]">CLOUD &amp; AI</span>
       </div>
-      <ChipsRow label="云服务筛选">
+      <div className="mt-3">
+        <SubscriptionEntryCard subs={subs} rates={subRates} onOpen={onOpenSubscriptions} />
+      </div>
+      <div className="mt-6">
+        <ChipsRow label="云服务筛选">
         <Chip active={chip === "all"} onClick={() => setChip("all")} label="全部" ariaLabel="全部云服务与 AI" />
         <Chip active={chip === "cloud"} onClick={() => setChip("cloud")} label="云服务" ariaLabel="只看云服务" />
         <Chip active={chip === "ai"} onClick={() => setChip("ai")} label="AI" ariaLabel="只看 AI 额度" />
-      </ChipsRow>
+        </ChipsRow>
+      </div>
       <div className="mt-4">
         {list.length > 0 ? (
           <div className="flex flex-col gap-3">
@@ -8534,6 +9053,8 @@ export function App() {
   // 一键入库领取队列的条目（游戏页多选的结果，或详情页的单款），按选中顺序。
   const [batchItems, setBatchItems] = useState<Deal[] | null>(null);
   const [tab, setTab] = useState<MainTab>("today");
+  const [subsOpen, setSubsOpen] = useState(false);
+  const fxRates = useCnyRates(true);
   const [innerTab, setInnerTab] = useState<InnerTab>("today");
   const [now, setNow] = useState(() => Date.now());
   const [onlySaved, setOnlySaved] = useState(false);
@@ -8713,7 +9234,7 @@ export function App() {
             onOpenBatchClaim={(items) => setBatchItems(items)}
           />
         ) : tab === "cloud" ? (
-          <CloudPage deals={deals} now={now} onOpen={openDetail} hideClaimed={hideClaimed} hideHidden={hideHidden} />
+          <CloudPage deals={deals} now={now} onOpen={openDetail} hideClaimed={hideClaimed} hideHidden={hideHidden} onOpenSubscriptions={() => setSubsOpen(true)} />
         ) : (
           <MinePage
             session={session}
@@ -8748,6 +9269,10 @@ export function App() {
             setBatchItems([d]);
           }}
         />
+      ) : null}
+
+      {subsOpen ? (
+        <SubscriptionPage rates={fxRates} now={now} onClose={() => setSubsOpen(false)} />
       ) : null}
 
       {batchItems ? (
