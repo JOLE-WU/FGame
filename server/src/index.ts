@@ -13,7 +13,7 @@
 import http from "node:http";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, normalize, resolve } from "node:path";
-import { Actions } from "./actions";
+import { Actions, warmAppRankings } from "./actions";
 import { db, runMigrations } from "./db";
 import type { Ctx } from "./sdk-shim";
 
@@ -274,7 +274,13 @@ if (process.env.FGAME_AUTO_REFRESH === "1") {
     }
   };
   setInterval(() => { void refresh(); }, ms);
-  // Let the HTTP server settle first; the sync itself is async and never
-  // blocks request handling.
-  setTimeout(() => { void refresh(); }, 3000);
+  // Keep the 10-minute ranking cache warm independently of the (slow, capped)
+  // deals refresh: the v2 software feed can take 20+s cold, past the client's
+  // 20s timeout, so pre-fetch it in the background and re-warm periodically.
+  setInterval(() => { void warmAppRankings(ctx); }, ms);
+  // Let the HTTP server settle first; both jobs are async and never block.
+  setTimeout(() => {
+    void refresh();
+    void warmAppRankings(ctx);
+  }, 3000);
 }

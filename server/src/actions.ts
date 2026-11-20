@@ -5018,7 +5018,9 @@ function bundleVendor(bundleId: string | null): string {
   return bundleId.toLowerCase().split(".").slice(0, 2).join(".");
 }
 
-const APP_RANKING_TTL_MS = 10 * 60_000;
+// Rankings refresh slowly; cache 6h to match the background warm interval so
+// a cold 20s-timeout request almost never has to hit Apple's flaky v2 feed.
+const APP_RANKING_TTL_MS = 6 * 60 * 60_000;
 const GAME_GENRE_IDS = new Set([
   6014, 7001, 7002, 7003, 7004, 7005, 7006, 7007, 7008, 7009,
   7011, 7012, 7013, 7014, 7015, 7016, 7017, 7018, 7019,
@@ -6369,6 +6371,8 @@ export const Actions = {
       chart: z.enum(["free", "paid"]).optional(),
       genre: z.number().int().positive().optional(),
       limit: z.number().int().min(10).max(100).optional(),
+      /** Internal: background cache warmer allows longer timeouts + retries. */
+      warm: z.boolean().optional(),
     }),
     response: z.object({
       country: z.string(),
@@ -6383,79 +6387,191 @@ export const Actions = {
       const kind = args.kind === "games" ? "games" : "apps";
       const chart = args.chart === "paid" ? "paid" : "free";
       const limit = Math.min(100, Math.max(10, args.limit ?? 50));
-      // Games default to the Games genre (6014); apps use the all-apps chart.
+      // Games support any game sub-genre via v1 RSS; default 6014 (all games).
+      // Apps no longer use a genre — see the v2 software-chart path below.
       const genre =
         kind === "games"
           ? args.genre && GAME_GENRE_IDS.has(args.genre)
             ? args.genre
             : 6014
-          : args.genre && Number.isInteger(args.genre)
-            ? args.genre
-            : null;
+          : null;
       const cacheKey = `${country}:${kind}:${chart}:${genre ?? 0}:${limit}`;
       const empty = { country, kind, chart, genre, apps: [] as RankingAppOut[], ok: false };
       const cached = appRankingCache.get(cacheKey);
       if (cached && Date.now() - cached.at < APP_RANKING_TTL_MS) {
         return { country, kind, chart, genre, apps: cached.apps, ok: true };
       }
-      const feed = chart === "free" ? "topfreeapplications" : "toppaidapplications";
-      const genreSeg = genre ? `/genre=${genre}` : "";
-      const url = `https://itunes.apple.com/${country}/rss/${feed}/limit=${limit}${genreSeg}/json`;
-      let raw: Record<string, unknown>;
-      try {
-        const res = await fetch(url, {
-          headers: { "User-Agent": "Mozilla/5.0" },
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!res.ok) return empty;
-        raw = (await res.json()) as Record<string, unknown>;
-      } catch {
-        // Apple unreachable: keep the last good chart rather than blanking.
-        return cached ? { country, kind, chart, genre, apps: cached.apps, ok: true } : empty;
-      }
-      const feedObj = raw.feed && typeof raw.feed === "object" ? (raw.feed as Record<string, unknown>) : {};
-      const entry = feedObj.entry;
-      const list: Record<string, unknown>[] = Array.isArray(entry)
-        ? (entry as Record<string, unknown>[])
-        : entry && typeof entry === "object"
-          ? [entry as Record<string, unknown>]
-          : [];
       const rec = (v: unknown): Record<string, unknown> =>
         v && typeof v === "object" ? (v as Record<string, unknown>) : {};
       const attrs = (v: unknown): Record<string, unknown> => rec(rec(v).attributes);
       const apps: RankingAppOut[] = [];
-      for (const e of list) {
-        const name = String(rec(e["im:name"]).label ?? "").trim();
-        if (!name) continue;
-        const imgs = Array.isArray(e["im:image"]) ? (e["im:image"] as Record<string, unknown>[]) : [];
-        const iconRaw = String(rec(imgs[imgs.length - 1] ?? imgs[0]).label ?? "");
-        const priceObj = rec(e["im:price"]);
-        const priceAttrs = attrs(e["im:price"]);
-        const catAttrs = attrs(e.category);
-        const catLabel = String(catAttrs.label ?? "").trim();
-        // Apple 的 top-free / top-paid applications 总榜本身就混入游戏，付费榜
-        // 尤其严重（实测美区 99 条里 61 条是游戏，Minecraft/GTA 等）。但 RSS v1
-        // 没有「仅软件」的 genre（genre=36 实测等于总榜，不生效），所以「内容=软件」
-        // 时按每条自带 category 剔除游戏。必须用稳定的 genre id（6014）或英文
-        // term（"Games"）判断——label 是本地化的（"游戏"/"ゲーム"），按 label
-        // 判断会在非英文区漏判。rank 用 apps.length+1 自然连续；「内容=游戏」
-        // 走 genre=6014 官方游戏榜，本就纯净。
-        const catGenreId = String(catAttrs["im:id"] ?? "");
-        const catTerm = String(catAttrs.term ?? "").toLowerCase();
-        const isGameEntry = catGenreId === "6014" || catTerm === "games";
-        if (kind === "apps" && isGameEntry) continue;
-        apps.push({
-          rank: apps.length + 1,
-          trackId: Number(attrs(e.id)["im:id"] ?? 0),
-          name,
-          iconUrl: iconRaw ? iconRaw.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
-          storeUrl: String(attrs(e.link).href ?? rec(e.id).label ?? "") || null,
-          sellerName: String(rec(e["im:artist"]).label ?? "") || null,
-          genre: catLabel || null,
-          price: String(priceObj.label ?? ""),
-          currency: String(priceAttrs.currency ?? ""),
-          releaseDate: String(rec(e["im:releaseDate"]).label ?? "") || null,
-        });
+
+      if (kind === "apps") {
+        // Apple v1 `topfreeapplications`/`toppaidapplications` is a MIXED chart
+        // (paid US: 61 of 99 entries are Games) and there is no v1 "apps-only"
+        // genre (genre=36 returns the same mixed chart). Apple's Marketing Tools
+        // v2 has a dedicated pure-software feed: /apps/{top-free|top-paid}/{n}/apps.json
+        // → 100 real apps, zero games. v2 lacks prices, so fill those in with one
+        // batch iTunes lookup (up to 200 ids) which returns price/currency/genre.
+        // (v2 has no /games.json — games stay on the v1 path below.)
+        const chartSeg = chart === "free" ? "top-free" : "top-paid";
+        const v2url = `https://rss.applemarketingtools.com/api/v2/${country}/apps/${chartSeg}/${limit}/apps.json`;
+        let v2results: Record<string, unknown>[] = [];
+        // Online requests stay inside the client's 20s budget: 12s once, then a
+        // fast v1-filtered fallback. The background warmer (args.warm) can afford
+        // 28s × 3 retries to fill the full 100 into cache at its leisure.
+        const warmMode = args.warm === true;
+        const attempts = warmMode ? 3 : 1;
+        for (let attempt = 0; attempt < attempts && v2results.length === 0; attempt++) {
+          try {
+            const res = await fetch(v2url, {
+              headers: { "User-Agent": "Mozilla/5.0" },
+              signal: AbortSignal.timeout(warmMode ? 28_000 : 12_000),
+            });
+            if (res.ok) {
+              const data = (await res.json()) as { feed?: { results?: Record<string, unknown>[] } };
+              v2results = Array.isArray(data.feed?.results) ? data.feed!.results! : [];
+            }
+          } catch {
+            // retry (warm) / fall back (online)
+          }
+        }
+        // Batch lookup for prices/metadata, keyed by trackId.
+        const ids = v2results
+          .map((r) => Number(r.id))
+          .filter((n) => Number.isFinite(n) && n > 0);
+        const metaById = new Map<number, Record<string, unknown>>();
+        if (ids.length > 0) {
+          try {
+            const res = await fetch(
+              `https://itunes.apple.com/lookup?id=${ids.join(",")}&country=${country}&entity=software`,
+              { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(18_000) },
+            );
+            if (res.ok) {
+              const data = (await res.json()) as { results?: Record<string, unknown>[] };
+              for (const r of data.results ?? []) {
+                if (typeof r.trackId === "number") metaById.set(r.trackId, r);
+              }
+            }
+          } catch {
+            // lookup interruption: still return v2 list with fallback prices
+          }
+        }
+        for (const r of v2results) {
+          const trackId = Number(r.id);
+          if (!Number.isFinite(trackId) || trackId <= 0) continue;
+          const name = String(r.name ?? "").trim();
+          if (!name) continue;
+          const m = metaById.get(trackId) ?? {};
+          const icon = String(r.artworkUrl100 ?? m.artworkUrl100 ?? "");
+          const price = typeof m.price === "number" ? m.price : 0;
+          const currency = String(m.currency ?? "");
+          const formatted = typeof price === "number" && price > 0
+            ? (currency === "CNY" ? `¥${price.toFixed(2)}` : `${currency} ${price.toFixed(2)}`)
+            : "Free";
+          apps.push({
+            rank: apps.length + 1,
+            trackId,
+            name,
+            iconUrl: icon ? icon.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
+            storeUrl: String(r.url ?? m.trackViewUrl ?? "") || null,
+            sellerName: String(m.artistName ?? r.artistName ?? "") || null,
+            genre: String(m.primaryGenreName ?? "") || null,
+            price: formatted,
+            currency,
+            releaseDate: String(m.releaseDate ?? r.releaseDate ?? "") || null,
+          });
+        }
+        if (apps.length === 0) {
+          // v2 unavailable (slow/502) and no warm cache: fall back to the v1
+          // mixed chart with games stripped by stable genre id. Fewer entries,
+          // but fast and never empty — the warmer will fill 100 next cycle.
+          try {
+            const v1feed = chart === "free" ? "topfreeapplications" : "toppaidapplications";
+            const v1res = await fetch(
+              `https://itunes.apple.com/${country}/rss/${v1feed}/limit=200/json`,
+              { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(10_000) },
+            );
+            if (v1res.ok) {
+              const raw = (await v1res.json()) as Record<string, unknown>;
+              const fo = rec(raw.feed);
+              const entry = fo.entry;
+              const list = Array.isArray(entry)
+                ? entry as Record<string, unknown>[]
+                : entry && typeof entry === "object" ? [entry as Record<string, unknown>] : [];
+              for (const e of list) {
+                const cat = attrs(e.category);
+                if (String(cat["im:id"] ?? "") === "6014" || String(cat.term ?? "").toLowerCase() === "games") continue;
+                const name = String(rec(e["im:name"]).label ?? "").trim();
+                if (!name) continue;
+                const imgs = Array.isArray(e["im:image"]) ? e["im:image"] as Record<string, unknown>[] : [];
+                const iconRaw = String(rec(imgs[imgs.length - 1] ?? imgs[0]).label ?? "");
+                apps.push({
+                  rank: apps.length + 1,
+                  trackId: Number(attrs(e.id)["im:id"] ?? 0),
+                  name,
+                  iconUrl: iconRaw ? iconRaw.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
+                  storeUrl: String(attrs(e.link).href ?? rec(e.id).label ?? "") || null,
+                  sellerName: String(rec(e["im:artist"]).label ?? "") || null,
+                  genre: String(cat.label ?? "") || null,
+                  price: String(rec(e["im:price"]).label ?? ""),
+                  currency: String(attrs(e["im:price"]).currency ?? ""),
+                  releaseDate: String(rec(e["im:releaseDate"]).label ?? "") || null,
+                });
+              }
+            }
+          } catch {
+            // give up gracefully
+          }
+        }
+        if (apps.length === 0) {
+          return cached ? { country, kind, chart, genre, apps: cached.apps, ok: true } : empty;
+        }
+      } else {
+        // Games: official v1 RSS with genre=6014 (or a game sub-genre), which is
+        // all-games and includes prices. Unchanged behavior.
+        const feed = chart === "free" ? "topfreeapplications" : "toppaidapplications";
+        const genreSeg = genre ? `/genre=${genre}` : "";
+        const url = `https://itunes.apple.com/${country}/rss/${feed}/limit=${limit}${genreSeg}/json`;
+        let raw: Record<string, unknown>;
+        try {
+          const res = await fetch(url, {
+            headers: { "User-Agent": "Mozilla/5.0" },
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!res.ok) return empty;
+          raw = (await res.json()) as Record<string, unknown>;
+        } catch {
+          return cached ? { country, kind, chart, genre, apps: cached.apps, ok: true } : empty;
+        }
+        const feedObj = raw.feed && typeof raw.feed === "object" ? (raw.feed as Record<string, unknown>) : {};
+        const entry = feedObj.entry;
+        const list: Record<string, unknown>[] = Array.isArray(entry)
+          ? (entry as Record<string, unknown>[])
+          : entry && typeof entry === "object"
+            ? [entry as Record<string, unknown>]
+            : [];
+        for (const e of list) {
+          const name = String(rec(e["im:name"]).label ?? "").trim();
+          if (!name) continue;
+          const imgs = Array.isArray(e["im:image"]) ? (e["im:image"] as Record<string, unknown>[]) : [];
+          const iconRaw = String(rec(imgs[imgs.length - 1] ?? imgs[0]).label ?? "");
+          const priceObj = rec(e["im:price"]);
+          const priceAttrs = attrs(e["im:price"]);
+          const catAttrs = attrs(e.category);
+          apps.push({
+            rank: apps.length + 1,
+            trackId: Number(attrs(e.id)["im:id"] ?? 0),
+            name,
+            iconUrl: iconRaw ? iconRaw.replace(/\/\d+x\d+bb\./i, "/200x200bb.") : null,
+            storeUrl: String(attrs(e.link).href ?? rec(e.id).label ?? "") || null,
+            sellerName: String(rec(e["im:artist"]).label ?? "") || null,
+            genre: String(catAttrs.label ?? "") || null,
+            price: String(priceObj.label ?? ""),
+            currency: String(priceAttrs.currency ?? ""),
+            releaseDate: String(rec(e["im:releaseDate"]).label ?? "") || null,
+          });
+        }
       }
       if (apps.length === 0) return empty;
       appRankingCache.set(cacheKey, { at: Date.now(), apps });
@@ -9239,3 +9355,38 @@ export const Actions = {
   }),
 
 } satisfies ActionsModule;
+
+/**
+ * Warm the App Store ranking cache in the background. The v2 software feed can
+ * take 20+s on a cold connection, which exceeds the client's 20s action timeout;
+ * pre-populating appRankingCache means user requests hit cache instantly. Called
+ * at startup and on each auto-refresh cycle (see index.ts). Best-effort only —
+ * failures are swallowed and retried on the next cycle / on demand.
+ */
+export async function warmAppRankings(ctxForWarm: unknown): Promise<void> {
+  const regions = [...APP_RANKING_COUNTRIES];
+  // Only apps need warming: their v2 feed can be slow. Games use the fast v1
+  // chart and populate their cache on demand, so no need to pre-fetch them.
+  const jobs: { country: string; kind: "apps"; chart: "free" | "paid" }[] = [];
+  for (const country of regions) {
+    for (const chart of ["free", "paid"] as const) {
+      jobs.push({ country, kind: "apps", chart });
+    }
+  }
+  const entry = Actions.appStoreRanking as unknown as {
+    handler: (ctx: unknown, args: unknown) => Promise<unknown>;
+  };
+  // Limited concurrency (4) so a slow region can't block all the others.
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < jobs.length) {
+      const job = jobs[cursor++];
+      try {
+        await entry.handler(ctxForWarm, { ...job, limit: 100, warm: true });
+      } catch {
+        // best-effort
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker(), worker()]);
+}
