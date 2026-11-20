@@ -397,6 +397,19 @@ function showEpicBadge(deal: Deal): boolean {
   if (!isEpicGiveaway(deal) || platLineHasEpic(deal)) return false;
   return deal.epicMobile || deal.tags.includes("ios") || /android|ios/i.test(deal.platform);
 }
+/**
+ * 游戏页平台筛选的归类键：GamerPower 镜像的 Epic 手游（如 Lonesome Village）
+ * 数据层 gamePlatform 仍是 other、卡片却挂了 Epic 标签，点「Epic」筛选时
+ * 会漏掉、跑到「其他」里。这里把「实为 Epic」的手游统一归到 epic，让它
+ * 只出现在 Epic 分类下；Steam/GOG/Prime 仍按自身平台归类，不受影响。
+ */
+function gamePlatBucket(deal: Deal): string {
+  if (deal.gamePlatform === "steam" || deal.gamePlatform === "gog" || deal.gamePlatform === "prime") {
+    return deal.gamePlatform;
+  }
+  if (isEpicGiveaway(deal)) return "epic";
+  return deal.gamePlatform;
+}
 
 function categoryLabel(deal: Deal): string {
   if (deal.tags.includes("ai")) return "AI 免费额度";
@@ -5112,7 +5125,9 @@ function GamesPage({
             (d.tags.includes("game") || d.tags.includes("dlc")) &&
             // Epic 手游不再单列分栏：和 PC 版一样进「Epic」/「全部」，
             // 卡片上仍保留「手游版 安卓/iOS」属性标签以便区分。
-            (plat === "all" ? true : plat === "epic" ? d.gamePlatform === "epic" : d.gamePlatform === plat) &&
+            // GamerPower 镜像的 Epic 手游 gamePlatform 仍是 other，用
+            // gamePlatBucket 按「实为 Epic」归到 Epic，不再漏到「其他」。
+            (plat === "all" ? true : gamePlatBucket(d) === plat) &&
             (!hideClaimed || !d.claimed) &&
             (!hideHidden || !d.hidden) &&
             (!onlySaved || d.saved) &&
