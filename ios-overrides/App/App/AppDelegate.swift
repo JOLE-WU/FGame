@@ -232,12 +232,29 @@ private func fgameClaimTopScript() -> String {
           var txt = (document.body && document.body.innerText || '').toLowerCase();
           if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
           if (txt.indexOf('already own') >= 0 || txt.indexOf('in library') >= 0) { ev('owned'); ACTIVE = false; return; }
+          // "Account id is missing" / "发生意外错误" is Epic's checkout error
+          // when the SAME browser session has no signed-in Epic account. The
+          // reference one-tap flows all require signing in first. Report it as
+          // a dedicated step so native can open the sign-in page in this very
+          // WKWebView (shared cookies) and then resume — not spin to timeout.
+          if (txt.indexOf('account id is missing') >= 0 || txt.indexOf('发生意外错误') >= 0 ||
+              txt.indexOf('account id is not') >= 0) {
+            ev('needlogin'); ACTIVE = false; return;
+          }
           // Epic sometimes returns its own error screen ("unknown error",
           // "something went wrong", "an error occurred"). Don't spin forever:
           // report it so native can show a clear manual-claim fallback.
           if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
               txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
             ev('error'); ACTIVE = false; return;
+          }
+          // Never AUTO-CLICK on Epic's sign-in/auth pages — they have their own
+          // "Continue" buttons and must be driven by the human logging in.
+          // Text detection above still runs there, so needlogin is caught even
+          // when Epic renders the error under an /id/* or *login* URL.
+          var path = (window.location.pathname || '').toLowerCase();
+          if (path.indexOf('/id/') >= 0 || path.indexOf('login') >= 0) {
+            setTimeout(tick, 700); return;
           }
           var agree = document.querySelector('#agree') || document.querySelector('input[type=checkbox][id*=agree]');
           if (agree && !agree.checked && visible(agree)) { agree.click(); }
@@ -288,6 +305,8 @@ private func fgameClaimFrameScript() -> String {
           var txt = (document.body && document.body.innerText || '').toLowerCase();
           if (txt.indexOf('thanks for your order') >= 0) { ev('success'); ACTIVE = false; return; }
           if (txt.indexOf('captcha') >= 0 || txt.indexOf('challenge') >= 0) { ev('captcha'); ACTIVE = false; return; }
+          if (txt.indexOf('account id is missing') >= 0 || txt.indexOf('发生意外错误') >= 0 ||
+              txt.indexOf('account id is not') >= 0) { ev('needlogin'); ACTIVE = false; return; }
           if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
               txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
             ev('error'); ACTIVE = false; return;
@@ -328,6 +347,21 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
     /// (e.g. an unrecognised page), advance instead of spinning forever.
     private var offerWatchdog: Timer?
     private var offerGeneration = 0
+    /// Epic checkout reported "Account id is missing" — the WKWebView has no
+    /// signed-in Epic session. We open the official sign-in page IN THIS web
+    /// view (same .default() cookie jar), let the user log in, then retry the
+    /// current offer. The index is NOT advanced while waiting for login.
+    private var awaitingLogin = false
+    /// When the login gate opened — auto-detect only after a few seconds so a
+    /// transient redirect during page load can't be mistaken for a login.
+    private var loginGateOpenedAt: Date?
+    /// Guard against an endless login→purchase→needlogin loop on one offer.
+    private var loginRetryIndex = -1
+    private var loginRetryCount = 0
+
+    /// Official Epic sign-in landing page. No redirectUrl: after login Epic
+    /// returns to its own site/home, which native detects to auto-resume.
+    private let epicSignInURL = "https://www.epicgames.com/id/login/guided?lang=zh-CN"
 
     init(offers: [FGameClaimOffer]) {
         self.offers = offers
@@ -363,6 +397,17 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
         progress.textColor = UIColor(white: 0.75, alpha: 1)
         progress.font = .systemFont(ofSize: 12)
         progress.tag = 9101
+        // Shown only while waiting for the user to sign in to Epic in this
+        // WebView. Tapping it re-loads the current offer now that cookies are
+        // present. A fallback in case auto-detect of the login redirect fails.
+        let resume = UIButton(type: .system)
+        resume.translatesAutoresizingMaskIntoConstraints = false
+        resume.setTitle("继续领取", for: .normal)
+        resume.setTitleColor(UIColor(red: 0.45, green: 0.85, blue: 1, alpha: 1), for: .normal)
+        resume.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
+        resume.addTarget(self, action: #selector(resumeAfterLoginTapped), for: .touchUpInside)
+        resume.tag = 9102
+        resume.isHidden = true
         let close = UIButton(type: .system)
         close.translatesAutoresizingMaskIntoConstraints = false
         close.setTitle("结束", for: .normal)
@@ -373,6 +418,7 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
         view.addSubview(bar)
         bar.addSubview(title)
         bar.addSubview(progress)
+        bar.addSubview(resume)
         bar.addSubview(close)
         view.addSubview(webView)
 
@@ -385,6 +431,8 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
             title.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 18),
             progress.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             progress.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 18),
+            resume.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            resume.trailingAnchor.constraint(equalTo: close.leadingAnchor, constant: -14),
             close.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             close.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -18),
             webView.topAnchor.constraint(equalTo: bar.bottomAnchor),
@@ -402,6 +450,56 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
 
     private func setProgress(_ text: String) {
         if let p = view.viewWithTag(9101) as? UILabel { p.text = text }
+    }
+
+    // MARK: - Login gate ("Account id is missing")
+    //
+    // Epic's 0-cost checkout needs a signed-in Epic account in this exact
+    // browser session. If the user only logged in elsewhere (e.g. the detail
+    // page's target=_blank link opens Safari with a different cookie jar), the
+    // checkout returns "Account id is missing". We handle that step by loading
+    // the official sign-in page IN THIS WebView, so the session cookies land
+    // where the checkout will later read them, then resume the same offer.
+
+    private func enterLoginGate() {
+        guard !awaitingLogin else { return }
+        // Cap retries per offer so a persistent server-side error can't loop.
+        if loginRetryIndex == index { loginRetryCount += 1 }
+        else { loginRetryIndex = index; loginRetryCount = 1 }
+        awaitingLogin = true
+        loginGateOpenedAt = Date()
+        cancelWatchdog()
+        checkoutFrame = nil
+        setProgress("未登录 Epic：请在页面内登录，登录后自动继续")
+        if let btn = view.viewWithTag(9102) as? UIButton { btn.isHidden = false }
+        webView.load(URLRequest(url: URL(string: epicSignInURL)!))
+    }
+
+    /// Re-load the current offer after sign-in. The index was NOT advanced on
+    /// needlogin, so this retries the same offer with fresh session cookies.
+    private func resumeAfterLogin() {
+        guard awaitingLogin else { return }
+        awaitingLogin = false
+        loginGateOpenedAt = nil
+        if let btn = view.viewWithTag(9102) as? UIButton { btn.isHidden = true }
+        setProgress("已登录，继续领取…")
+        loadCurrentOffer()
+    }
+
+    @objc private func resumeAfterLoginTapped() { resumeAfterLogin() }
+
+    /// True when `url` looks like a post-login Epic page (browser session now
+    /// has an account). The sign-in page lives under /id/, so reaching any
+    /// other epicgames.com page means the user got through. We deliberately
+    /// exclude the sign-in URL itself and cross-origin OAuth hops.
+    private func isPostLoginPage(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(),
+              host.contains("epicgames.com") else { return false }
+        let path = url.path.lowercased()
+        if path.hasPrefix("/id/") { return false }
+        if path.contains("login") { return false }
+        return true
     }
 
     /// Cancel the watchdog for the current offer. Called on every terminal
@@ -472,6 +570,20 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
                 index += 1
                 checkoutFrame = nil
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.loadCurrentOffer() }
+            } else if step == "needlogin" && loginRetryCount < 2 {
+                // Epic's checkout could not resolve an account ("Account id is
+                // missing"). Do NOT count this as a failure and do NOT advance
+                // the index — open the official sign-in page in this WebView
+                // (shared cookies) and retry the same offer after login.
+                enterLoginGate()
+            } else if step == "needlogin" {
+                // Already retried login twice for this offer and still failing
+                // — stop looping, treat as a normal failure so the queue moves.
+                if index < offers.count { failed.append(offers[index].title) }
+                index += 1
+                checkoutFrame = nil
+                setProgress("登录后仍无法领取，请手动领取")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.loadCurrentOffer() }
             } else if step == "error" || step == "captcha" {
                 // Epic returned its own error / captcha screen. Count it as
                 // failed so the front end can tell the user to claim manually,
@@ -484,6 +596,20 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
             }
             decisionHandler(.cancel)
             return
+        }
+        // While waiting for the user to sign in, watch for navigation to a
+        // normal Epic page (login completed → redirected off /id/*). Resume
+        // the claim automatically; the 继续领取 button is the manual fallback.
+        if awaitingLogin,
+           let opened = loginGateOpenedAt,
+           Date().timeIntervalSince(opened) > 3.0,
+           navigationAction.targetFrame?.isMainFrame == true,
+           let url = navigationAction.request.url,
+           isPostLoginPage(url) {
+            loginGateOpenedAt = nil   // fire the auto-resume only once
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                self?.resumeAfterLogin()
+            }
         }
         if let f = navigationAction.targetFrame, !f.isMainFrame,
            let u = navigationAction.request.url,
