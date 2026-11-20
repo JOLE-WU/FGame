@@ -6434,11 +6434,16 @@ export const Actions = {
         const catAttrs = attrs(e.category);
         const catLabel = String(catAttrs.label ?? "").trim();
         // Apple 的 top-free / top-paid applications 总榜本身就混入游戏，付费榜
-        // 尤其严重（实测美区 99 条里 61 条 category=Games， Minecraft/GTA 等）。
-        // 但 RSS v1 没有「仅软件」的 genre（genre=36 实测等于总榜，不生效），
-        // 所以「内容=软件」时按每条自带的 category 剔除 Games，rank 用
-        // apps.length+1 自然连续；「内容=游戏」走 genre=6014 官方游戏榜，本就纯净。
-        if (kind === "apps" && catLabel.toLowerCase() === "games") continue;
+        // 尤其严重（实测美区 99 条里 61 条是游戏，Minecraft/GTA 等）。但 RSS v1
+        // 没有「仅软件」的 genre（genre=36 实测等于总榜，不生效），所以「内容=软件」
+        // 时按每条自带 category 剔除游戏。必须用稳定的 genre id（6014）或英文
+        // term（"Games"）判断——label 是本地化的（"游戏"/"ゲーム"），按 label
+        // 判断会在非英文区漏判。rank 用 apps.length+1 自然连续；「内容=游戏」
+        // 走 genre=6014 官方游戏榜，本就纯净。
+        const catGenreId = String(catAttrs["im:id"] ?? "");
+        const catTerm = String(catAttrs.term ?? "").toLowerCase();
+        const isGameEntry = catGenreId === "6014" || catTerm === "games";
+        if (kind === "apps" && isGameEntry) continue;
         apps.push({
           rank: apps.length + 1,
           trackId: Number(attrs(e.id)["im:id"] ?? 0),
