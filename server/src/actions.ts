@@ -6864,6 +6864,22 @@ export const Actions = {
         cn: "CNY", hk: "HKD", tw: "TWD", jp: "JPY", kr: "KRW", sg: "SGD", us: "USD",
         gb: "GBP", ca: "CAD", au: "AUD", in: "INR", tr: "TRY", ng: "NGN", eg: "EGP",
       };
+      // 内购价来自 apps.apple.com 商品页，而 Apple 会按服务器出口 IP 把别区页面 302 到 cn，
+      // 导致非本区内购整列读不到（本体价走 itunes lookup 不受影响）。带上真实 storefront
+      // header 后页面就按指定区渲染、不再被重定向。ID 为实测各区有效值，格式 {id}-{device},{platform}。
+      const STOREFRONT_HEADER: Record<string, string> = {
+        cn: "143465-2,32", hk: "143463-2,32", tw: "143470-2,32", jp: "143462-1,32",
+        kr: "143466-2,32", sg: "143464-2,32", us: "143441-1,32", gb: "143444-2,32",
+        ca: "143502-2,32", au: "143460-2,32", in: "143450-2,32", tr: "143480-2,32",
+        ng: "143461-2,32", eg: "143469-2,32",
+      };
+      // 页面 meta.storefront.cc 是权威定价货币区：Apple 会把部分区并到邻近货币区
+      // （如印度区定价落在欧元、香港落在台币），用页面标注的货币查汇率才自洽。
+      const STOREFRONT_CC_CURRENCY: Record<string, string> = {
+        CN: "CNY", US: "USD", JP: "JPY", HK: "HKD", TW: "TWD", KR: "KRW", SG: "SGD",
+        GB: "GBP", CA: "CAD", AU: "AUD", IN: "INR", TR: "TRY", NG: "NGN", EG: "EGP",
+        IT: "EUR", FR: "EUR", DE: "EUR", ES: "EUR", NL: "EUR", IE: "EUR",
+      };
       const ACCEPT_LANG: Record<string, string> = {
         cn: "zh-CN,zh;q=0.9", tw: "zh-TW,zh;q=0.9", hk: "zh-HK,zh;q=0.9",
         jp: "ja-JP,ja;q=0.9", kr: "ko-KR,ko;q=0.9",
@@ -6907,50 +6923,80 @@ export const Actions = {
           items: [],
         };
         try {
+          // 带 storefront header 强制按指定区渲染，避免 Apple 按出口 IP 把商品页 302 到 cn。
           const res = await fetch(`https://apps.apple.com/${cc}/app/id${args.trackId}`, {
             headers: {
               "User-Agent": UA,
               Accept: "text/html,application/xhtml+xml",
               "Accept-Language": ACCEPT_LANG[cc] ?? "en-US,en;q=0.9",
+              "X-Apple-Store-Front": STOREFRONT_HEADER[cc] ?? "",
             },
             redirect: "follow",
             signal: AbortSignal.timeout(20_000),
           });
           if (!res.ok) return blank;
-          // Apple 会按出口 IP 把别区页面 302 到本地 storefront：宁可缺这一行，也不能把别区价格冒充成本区。
+          // 仍被重定向到别区就放弃，不拿别区价格冒充成本区。
           const finalUrl = res.url ?? "";
           if (finalUrl && !finalUrl.includes(`/${cc}/`)) return blank;
           const html = await res.text();
-          const raw = html.match(/<script[^>]*id="serialized-server-data"[^>]*>([\s\S]*?)<\/script>/);
-          if (!raw?.[1]) return blank;
-          let doc: unknown;
-          try {
-            doc = JSON.parse(raw[1]);
-          } catch {
-            return blank;
+          // 页面权威定价货币区（如印度区被 Apple 归到 IT→EUR），用它查汇率才自洽。
+          const sfCc = (html.match(/"storefront":\{"cc":"([A-Z]+)"/)?.[1] ?? "").toUpperCase();
+          const currency = STOREFRONT_CC_CURRENCY[sfCc] ?? CC_CURRENCY[cc] ?? "";
+
+          let items: { name: string; price: string }[] = [];
+          let parsed = false;
+          // 新版轻量页：内购在 "addOns":[{"buyParams":"…","price":"$0.99","name":"…"},…]，数组内无嵌套方括号。
+          const idx = html.indexOf('"addOns":[');
+          if (idx >= 0) {
+            const start = idx + '"addOns":'.length;
+            const end = html.indexOf("]", start);
+            if (end > start) {
+              try {
+                const arr = JSON.parse(html.slice(start, end + 1)) as Record<string, unknown>[];
+                items = arr
+                  .filter((o) => o && typeof o.name === "string" && typeof o.price === "string")
+                  .map((o) => ({ name: (o.name as string).trim(), price: (o.price as string).trim() }))
+                  .filter((i) => i.name && i.price);
+                parsed = true;
+              } catch {
+                /* 落到旧版解析 */
+              }
+            }
           }
-          let annotation: Record<string, unknown> | null = null;
-          const walk = (node: unknown, depth = 0): void => {
-            if (!node || annotation || depth > 48) return;
-            if (Array.isArray(node)) {
-              for (const v of node) walk(v, depth + 1);
-              return;
+          // 旧版完整页兜底：serialized-server-data 里的「内购」Annotation。
+          if (!parsed) {
+            const raw = html.match(/<script[^>]*id="serialized-server-data"[^>]*>([\s\S]*?)<\/script>/);
+            if (!raw?.[1]) return blank;
+            let doc: unknown;
+            try {
+              doc = JSON.parse(raw[1]);
+            } catch {
+              return blank;
             }
-            if (typeof node !== "object") return;
-            const obj = node as Record<string, unknown>;
-            if (obj.$kind === "Annotation" && /内购|In-App Purchase/i.test(String(obj.title ?? ""))) {
-              annotation = obj;
-              return;
-            }
-            for (const v of Object.values(obj)) walk(v, depth + 1);
-          };
-          walk(doc);
-          const hit = annotation as Record<string, unknown> | null;
-          if (!hit) return blank;
-          const items = ((hit.items as Record<string, unknown>[] | undefined) ?? [])
-            .filter((i) => i && i.$kind === "textPair")
-            .map((i) => ({ name: String(i.leadingText ?? "").trim(), price: String(i.trailingText ?? "").trim() }))
-            .filter((i) => i.name && i.price);
+            let annotation: Record<string, unknown> | null = null;
+            const walk = (node: unknown, depth = 0): void => {
+              if (!node || annotation || depth > 48) return;
+              if (Array.isArray(node)) {
+                for (const v of node) walk(v, depth + 1);
+                return;
+              }
+              if (typeof node !== "object") return;
+              const obj = node as Record<string, unknown>;
+              if (obj.$kind === "Annotation" && /内购|In-App Purchase/i.test(String(obj.title ?? ""))) {
+                annotation = obj;
+                return;
+              }
+              for (const v of Object.values(obj)) walk(v, depth + 1);
+            };
+            walk(doc);
+            const hit = annotation as Record<string, unknown> | null;
+            if (!hit) return blank;
+            items = ((hit.items as Record<string, unknown>[] | undefined) ?? [])
+              .filter((i) => i && i.$kind === "textPair")
+              .map((i) => ({ name: String(i.leadingText ?? "").trim(), price: String(i.trailingText ?? "").trim() }))
+              .filter((i) => i.name && i.price);
+            parsed = true;
+          }
           const priced = items
             .map((i) => ({ ...i, n: parseMoney(i.price) }))
             .filter((i): i is { name: string; price: string; n: number } => i.n != null && i.n > 0);
@@ -6958,6 +7004,7 @@ export const Actions = {
           const max = priced.length ? priced.reduce((a, b) => (b.n > a.n ? b : a)) : null;
           return {
             ...blank,
+            currency,
             // 页面解析成功就说明这一区能读到（哪怕 App 确实没有内购，count 为 0）。
             available: true,
             count: items.length,

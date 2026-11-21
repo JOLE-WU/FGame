@@ -2187,6 +2187,10 @@ function StoreDetail({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const dev = useAppStoreDeveloper(app.trackId, country);
+  // 全库搜索详情也支持「各区价格对比」：本体价 + 内购起价，点某区可进该区详情。
+  const [regionRow, setRegionRow] = useState<RegionPriceRow | null>(null);
+  // 外区价格要折成人民币做参照；国区本身就是 ¥，和榜单详情同一口径。
+  const rates = useCnyRates(true);
 
   const rows: [string, string][] = [
     ["当前价格", app.price === 0 ? "免费" : app.formattedPrice],
@@ -2284,8 +2288,28 @@ function StoreDetail({
           ))}
         </dl>
 
+        <RegionPriceCompare
+          trackId={app.trackId}
+          currentCc={country}
+          currentName={app.name}
+          rates={rates}
+          onOpenRegion={setRegionRow}
+          defaultView="iap"
+        />
+
         <AppStoreProfile trackId={app.trackId} country={country} fallbackImages={app.iconUrl ? [app.iconUrl] : undefined} />
       </div>
+
+      {regionRow ? (
+        <RegionAppSheet
+          row={regionRow}
+          baseName={app.name}
+          watched={watched}
+          onToggleWatch={onToggleWatch}
+          onClose={() => setRegionRow(null)}
+          onOpenDeveloper={onOpenDeveloper}
+        />
+      ) : null}
     </div>,
     document.body,
   );
@@ -2915,12 +2939,15 @@ function RegionPriceCompare({
   currentName,
   rates,
   onOpenRegion,
+  defaultView = "base",
 }: {
   trackId: number;
   currentCc: string;
   currentName: string;
   rates: Record<string, number> | null;
   onOpenRegion: (row: RegionPriceRow) => void;
+  /** 全库搜索详情默认落在内购口径：搜出来的多为免费 App，本体价全是 0 没意义。 */
+  defaultView?: "base" | "iap";
 }) {
   const query = useQuery({
     queryKey: ["regionPrices", trackId, currentCc, currentName],
@@ -2929,7 +2956,7 @@ function RegionPriceCompare({
   });
   // 「本体 | 内购」不像以前那样上下叠两块表，改成标题行右侧的切换：
   // 同一块位置切两种口径，手机上少滚一屏。
-  const [priceView, setPriceView] = useState<"base" | "iap">("base");
+  const [priceView, setPriceView] = useState<"base" | "iap">(defaultView);
   // 用户可勾选要着重高亮的区（默认国/印/日/美），选择记在本地。
   const [focusRegions, setFocusRegions] = useState<Set<string>>(loadPriceFocus);
   const toggleFocus = (cc: string) => {
