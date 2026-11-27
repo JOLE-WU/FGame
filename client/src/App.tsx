@@ -902,9 +902,13 @@ function epicSignInUrl(): string {
  * 该链接本身就是服务端从官方 discover feed 的 namespace/offerId 拼出来的。
  */
 function claimOffersFromDeal(deal: Deal, title: string): ClaimOffer[] {
+  return parseClaimOffers([ deal.claimUrl ?? "", ...deal.epicOffers.map((o) => o.purchaseUrl), deal.combinedPurchaseUrl ?? "" ], title);
+}
+
+/** 从一条或多条 Epic purchase URL 里解析出去重的 {namespace, offerId}。 */
+function parseClaimOffers(urls: string[], title: string): ClaimOffer[] {
   const out: ClaimOffer[] = [];
   const seen = new Set<string>();
-  const urls = [ deal.claimUrl ?? "", ...deal.epicOffers.map((o) => o.purchaseUrl), deal.combinedPurchaseUrl ?? "" ];
   for (const u of urls) {
     let parsed: URL;
     try { parsed = new URL(u); } catch { continue; }
@@ -1025,6 +1029,12 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
   const mobileDeal =
     deal.epicMobile ||
     (purchaseMain && deal.epicOffers.length > 0 && deal.epicOffers.every((o) => o.platform === "android" || o.platform === "ios"));
+  // Epic 结算页在 iOS 上用系统浏览器(target=_blank)打开会被 Epic 按 UA 重定向到
+  // 「下载 App」引导页，而不是 0 元购物车。原生壳里把可解析 offer 的 epic 结算
+  // deal 统一走内嵌领取 WebView（桌面 UA），「去领取」也复用同一条链路。
+  const epicClaimOffers = claimOffersFromDeal(deal, mainTitle);
+  const nativeEpicClaim = isNativeClaimAvailable() && deal.status === "active" &&
+    (deal.gamePlatform === "epic" || purchaseMain) && epicClaimOffers.length > 0;
   const thumbUrl = (u: string) => u.replace("/0x0ss.jpg", "/643x0w.jpg");
 
   const toggleCls = (active: boolean) =>
@@ -1265,27 +1275,30 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
         ) : null}
 
         <div className="mt-8 grid gap-3">
-          {isNativeClaimAvailable() && deal.status === "active" && (deal.gamePlatform === "epic" || purchaseMain) ? (
-            (() => {
-              const offers = claimOffersFromDeal(deal, mainTitle);
-              if (offers.length === 0) return null;
-              return (
-                <button
-                  type="button"
-                  aria-label={`一键入库 ${mainTitle}（自动领取本体与免费附加内容）`}
-                  onClick={() => { setClaimNote(null); openEpicClaimNative(offers); }}
-                  className="cta-hard flex items-center justify-center gap-2 rounded-[14px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-[13px] text-center text-[15px] font-bold text-[var(--accent)]"
-                >
-                  ⚡ 一键入库{offers.length > 1 ? `（${offers.length} 项含免费附加内容）` : ""}
-                </button>
-              );
-            })()
+          {nativeEpicClaim ? (
+            <button
+              type="button"
+              aria-label={`一键入库 ${mainTitle}（自动领取本体与免费附加内容）`}
+              onClick={() => { setClaimNote(null); openEpicClaimNative(epicClaimOffers); }}
+              className="cta-hard flex items-center justify-center gap-2 rounded-[14px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-4 py-[13px] text-center text-[15px] font-bold text-[var(--accent)]"
+            >
+              ⚡ 一键入库{epicClaimOffers.length > 1 ? `（${epicClaimOffers.length} 项含免费附加内容）` : ""}
+            </button>
           ) : null}
           {claimNote ? (
             <p className="text-center text-xs font-medium leading-relaxed text-[var(--accent)]">{claimNote}</p>
           ) : null}
           {deal.status === "upcoming" ? (
             <span className="rounded-[14px] bg-[var(--surface2)] px-4 py-3.5 text-center text-[15px] font-medium text-[var(--dim)]">未开始</span>
+          ) : nativeEpicClaim ? (
+            <button
+              type="button"
+              aria-label={`去领取 ${mainTitle}（App 内结算，无需下载 Epic 客户端）`}
+              onClick={() => { setClaimNote(null); openEpicClaimNative(epicClaimOffers); }}
+              className="cta-hard flex items-center justify-center gap-3 rounded-[14px] bg-grad px-4 py-[13px] text-center text-[15px] font-bold tracking-[0.04em] text-[var(--accent-ink)]"
+            >
+              去领取 <span aria-hidden="true" className="font-mono text-base">→</span>
+            </button>
           ) : deal.claimUrl ? (
             <a
               href={deal.claimUrl}
@@ -1301,7 +1314,7 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
               {deal.source.includes("Epic") ? "Epic 商城领取" : "来源平台领取"}
             </span>
           )}
-          {purchaseMain && deal.claimUrl ? (
+          {purchaseMain && deal.claimUrl && !nativeEpicClaim ? (
             <a
               href={epicSignInUrl()}
               target="_blank"
@@ -1322,21 +1335,42 @@ function DealDetail({ deal, now, onClose, authToken, onQueueClaim }: { deal: Dea
                   ? "「去领取」是 Epic 官方 0 元结算页，一条链接带上安卓 + iOS 两端；只想领一端用下面两个按钮"
                   : "「去领取」是 Epic 官方 0 元结算页，核对金额为 0 后点「下订单」即领完"}
               </p>
-              <p className="text-center text-xs font-medium leading-relaxed text-[var(--warn)]">{EPIC_LOGIN_HOP_NOTE}</p>
+              <p className="text-center text-xs font-medium leading-relaxed text-[var(--warn)]">
+                {nativeEpicClaim
+                  ? "在 App 内结算，无需下载 Epic 客户端；若尚未登录，领取页会引导你在页面内登录并自动继续。"
+                  : EPIC_LOGIN_HOP_NOTE}
+              </p>
               {mobileDeal && deal.epicOffers.length > 1 ? (
                 <div className="flex gap-2.5">
-                  {deal.epicOffers.map((o) => (
-                    <a
-                      key={o.platform}
-                      href={o.purchaseUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label={`只领${o.platform === "android" ? "安卓" : "iOS"}版 ${mainTitle}`}
-                      className="flex h-11 flex-1 items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
-                    >
-                      只领{o.platform === "android" ? "安卓" : "iOS"}版
-                    </a>
-                  ))}
+                  {deal.epicOffers.map((o) => {
+                    const oneOffer = parseClaimOffers([o.purchaseUrl], mainTitle);
+                    const label = `只领${o.platform === "android" ? "安卓" : "iOS"}版`;
+                    if (nativeEpicClaim && oneOffer.length > 0) {
+                      return (
+                        <button
+                          key={o.platform}
+                          type="button"
+                          aria-label={`${label} ${mainTitle}（App 内结算）`}
+                          onClick={() => { setClaimNote(null); openEpicClaimNative(oneOffer); }}
+                          className="flex h-11 flex-1 items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
+                        >
+                          {label}
+                        </button>
+                      );
+                    }
+                    return (
+                      <a
+                        key={o.platform}
+                        href={o.purchaseUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        aria-label={`${label} ${mainTitle}`}
+                        className="flex h-11 flex-1 items-center justify-center rounded-[14px] border border-[var(--border)] bg-[var(--surface)] text-sm font-bold text-[var(--text)] backdrop-blur-md"
+                      >
+                        {label}
+                      </a>
+                    );
+                  })}
                 </div>
               ) : null}
             </>

@@ -241,12 +241,17 @@ private func fgameClaimTopScript() -> String {
               txt.indexOf('account id is not') >= 0) {
             ev('needlogin'); ACTIVE = false; return;
           }
-          // Epic sometimes returns its own error screen ("unknown error",
-          // "something went wrong", "an error occurred"). Don't spin forever:
-          // report it so native can show a clear manual-claim fallback.
+          // Epic's checkout error screen. In practice these are almost always
+          // a missing/stale signed-in Epic session in THIS web view (the same
+          // root cause as "Account id is missing"), so route them through the
+          // login gate rather than giving up: open the sign-in page here, then
+          // auto-resume the same offer. Include the Chinese texts ("未知错误",
+          // "发生错误") — Epic localises the checkout errors by account locale.
           if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
-              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
-            ev('error'); ACTIVE = false; return;
+              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0 ||
+              txt.indexOf('未知错误') >= 0 || txt.indexOf('发生错误') >= 0 ||
+              txt.indexOf('出现错误') >= 0 || txt.indexOf('出了点问题') >= 0) {
+            ev('needlogin'); ACTIVE = false; return;
           }
           // Never AUTO-CLICK on Epic's sign-in/auth pages — they have their own
           // "Continue" buttons and must be driven by the human logging in.
@@ -308,8 +313,10 @@ private func fgameClaimFrameScript() -> String {
           if (txt.indexOf('account id is missing') >= 0 || txt.indexOf('发生意外错误') >= 0 ||
               txt.indexOf('account id is not') >= 0) { ev('needlogin'); ACTIVE = false; return; }
           if (txt.indexOf('unknown error') >= 0 || txt.indexOf('something went wrong') >= 0 ||
-              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0) {
-            ev('error'); ACTIVE = false; return;
+              txt.indexOf('an error occurred') >= 0 || txt.indexOf('we couldn\'t') >= 0 ||
+              txt.indexOf('未知错误') >= 0 || txt.indexOf('发生错误') >= 0 ||
+              txt.indexOf('出现错误') >= 0 || txt.indexOf('出了点问题') >= 0) {
+            ev('needlogin'); ACTIVE = false; return;
           }
           var accepted = clickText(['i accept', 'accept']);
           if (accepted) { ev('accepted'); return; }
@@ -382,6 +389,12 @@ final class FGameClaimViewController: UIViewController, WKNavigationDelegate {
         webView.navigationDelegate = self
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.allowsBackForwardNavigationGestures = true
+        // Epic decides whether to serve the web 0-cost checkout or an
+        // "install the mobile app" page from the User-Agent. The default
+        // WKWebView UA looks like iOS Safari, so store.epicgames.com/purchase
+        // redirects mobile giveaways to a "download the app" page instead of
+        // the cart. Present as desktop Safari so the real checkout renders here.
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
         let bar = UIView()
         bar.translatesAutoresizingMaskIntoConstraints = false
