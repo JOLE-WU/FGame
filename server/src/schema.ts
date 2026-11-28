@@ -203,7 +203,10 @@ export const libraryItems = sqliteTable(
 // score exists; it is cached as a miss and retried only after a longer TTL.
 export const steamRatings = sqliteTable("steam_ratings", {
   key: text("key").primaryKey(),
+  // Steam player review percentage, 0-100 ("98% of the 143,527 user reviews
+  // for this game are positive"). Not a Metacritic media score.
   score: integer("score"),
+  reviewCount: integer("review_count"),
   appid: text("appid"),
   checkedAt: integer("checked_at").notNull(),
 });

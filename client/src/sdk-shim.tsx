@@ -120,6 +120,10 @@ export function createActionClient<M>(): ClientOf<M> {
     // queue spanning Epic+Steam+GOG can take a minute — a 20s cap made a
     // perfectly successful verify look like a network timeout.
     "verifyBatchClaim",
+    // Each unresolved title costs one Steam store-page fetch (the appreviews
+    // JSON endpoint is unreachable from the backend host). A 40-title batch
+    // runs 8 at a time and can legitimately take well over 20s.
+    "libraryRatings",
   ]);
   const SLOW_TIMEOUT_MS = 120_000;
   // The published backend is a mainland-China endpoint (Tencent Cloud CLB).

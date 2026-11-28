@@ -2195,43 +2195,62 @@ async function fetchSteamAppDetail(appid: string): Promise<LibGameDetail | null>
   };
 }
 
-// ---------- Steam Metacritic score resolution for the game library ----------
+// ---------- Steam player-review rating for the game library ----------
 // Every library game (whatever platform it came from) is ranked by the SAME
-// number: its Metacritic score as published on its Steam store page. Steam's
-// storesearch already carries `metascore` per item, so one request per title
-// is usually enough; appdetails' `metacritic.score` is the fallback. Nothing
-// is guessed — a title with no Steam match (or no Metacritic score) returns
-// null and is cached as a miss so it is not refetched on every library open.
+// number: its Steam review percentage — the "98% of the 143,527 user reviews
+// for this game are positive" line shown on the Steam store page. Steam's
+// dedicated appreviews JSON endpoint is NOT reachable from here (it answers
+// 302 to the storefront home for every parameter combination), so the number
+// is read off the store page itself. That page carries the sentence twice:
+// the "All Reviews" row (all languages) and a per-language row that says
+// "reviews in your language". Only the "for this game" wording is matched, so
+// the stored value is always the all-language total. Nothing is guessed — a
+// title with no Steam match, or a page without a review section, yields null
+// and is cached as a miss so it is not refetched on every library open.
 
-type SteamRating = { score: number | null; appid: string | null };
+type SteamReview = { pct: number | null; count: number | null; appid: string | null };
 
-function numScore(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100) return Math.round(v);
-  if (typeof v === "string" && v.trim()) {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
+const STEAM_PAGE_UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
+// birthtime/lastagecheck skip the age gate: without them a mature title
+// answers the birthday prompt, which contains no review sentence at all.
+const STEAM_PAGE_HEADERS: Record<string, string> = {
+  "User-Agent": STEAM_PAGE_UA,
+  Accept: "text/html,application/xhtml+xml",
+  "Accept-Language": "en-US,en;q=0.9",
+  Cookie: "birthtime=0; mature_content=1; lastagecheck=0; Steam_Language=english",
+};
+
+// Only the all-language wording is matched; "…reviews in your language…"
+// is the localized figure and must be ignored.
+const REVIEW_SENTENCE = /(\d{1,3})%\s+of\s+the\s+([\d,]+)\s+user reviews for this game are positive/i;
+
+async function fetchSteamReviewByAppid(appid: string): Promise<{ pct: number | null; count: number | null }> {
+  // The storefront drops connections under load; one retry roughly halves the
+  // miss rate, and a 15s cap keeps a dead page from stalling a whole batch.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(
+        `https://store.steampowered.com/app/${encodeURIComponent(appid)}/?l=english&cc=us`,
+        { headers: STEAM_PAGE_HEADERS, signal: AbortSignal.timeout(15000) },
+      );
+      if (!res.ok) continue;
+      const html = await res.text();
+      const m = REVIEW_SENTENCE.exec(html);
+      if (!m) return { pct: null, count: null };
+      const pct = Number(m[1] ?? "");
+      const count = Number((m[2] ?? "").replace(/,/g, ""));
+      if (!Number.isFinite(pct) || pct < 0 || pct > 100) return { pct: null, count: null };
+      return { pct, count: Number.isFinite(count) ? count : null };
+    } catch {
+      // network hiccup or timeout — retry once, then report a miss
+    }
   }
-  return null;
+  return { pct: null, count: null };
 }
 
-async function fetchSteamMetacriticByAppid(appid: string): Promise<number | null> {
-  try {
-    const res = await fetch(
-      `https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=us&l=schinese`,
-      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
-    );
-    if (!res.ok) return null;
-    const data = (await res.json()) as Record<string, unknown>;
-    const entry = data[appid] as Record<string, unknown> | undefined;
-    const d = entry?.data as Record<string, unknown> | undefined;
-    const mc = d?.metacritic as Record<string, unknown> | undefined;
-    return numScore(mc?.score);
-  } catch {
-    return null;
-  }
-}
-
-async function fetchSteamMetacriticByTitle(title: string): Promise<SteamRating | null> {
+async function fetchSteamReviewByTitle(title: string): Promise<SteamReview | null> {
   const clean = baseTitle(title).trim();
   if (clean.length < 2) return null;
   const words = clean.split(" ");
@@ -2240,8 +2259,8 @@ async function fetchSteamMetacriticByTitle(title: string): Promise<SteamRating |
     clean.split(/\s[-–:]\s/)[0] ?? clean,
     words.length > 2 ? words.slice(0, -1).join(" ") : "",
   ].filter((v, i, a) => v.trim().length >= 2 && a.indexOf(v) === i);
-  // English storefront first (best Metacritic coverage), then Chinese for
-  // titles that are only indexed under their localized name.
+  // English storefront first (Steam indexes the international title there),
+  // then Chinese for titles only searchable under their localized name.
   for (const locale of [
     { l: "en", cc: "US" },
     { l: "schinese", cc: "cn" },
@@ -2250,7 +2269,7 @@ async function fetchSteamMetacriticByTitle(title: string): Promise<SteamRating |
       try {
         const sres = await fetch(
           `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(cand)}&l=${locale.l}&cc=${locale.cc}`,
-          { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
+          { headers: { "User-Agent": STEAM_PAGE_UA }, signal: AbortSignal.timeout(8000) },
         );
         if (!sres.ok) continue;
         const sdata = (await sres.json()) as Record<string, unknown>;
@@ -2262,11 +2281,8 @@ async function fetchSteamMetacriticByTitle(title: string): Promise<SteamRating |
         const pick = exact ?? startsWith;
         if (!pick || typeof pick.id !== "number") continue;
         const appid = String(pick.id);
-        const fromSearch = numScore(pick.metascore);
-        if (fromSearch != null) return { score: fromSearch, appid };
-        // Search had no metascore — confirm from the app's own page.
-        const fromDetail = await fetchSteamMetacriticByAppid(appid);
-        return { score: fromDetail, appid };
+        const review = await fetchSteamReviewByAppid(appid);
+        return { pct: review.pct, count: review.count, appid };
       } catch {
         // try next candidate / locale
       }
@@ -7839,10 +7855,17 @@ export const Actions = {
               // both). Empty for Steam/GOG, claimed and manual entries
               // — the UI renders the mark only for Epic sync rows.
               devicePlatforms: z.array(z.enum(["pc", "mobile"])),
-              // Steam Metacritic score (0-100) for this game, resolved from
-              // the global cache by normalized title. Null until resolved or
-              // when the game has no Steam/Metacritic entry.
+              // Steam player-review percentage (0-100) for this game,
+              // resolved from the global cache by normalized title. Null
+              // until resolved or when the game has no Steam entry.
               rating: z.number().nullable(),
+              // How many Steam reviews that percentage is based on, so the
+              // UI can say "98% 好评 (143,527)" instead of a bare number.
+              ratingCount: z.number().nullable(),
+              // Steam appid backing the rating (and the cover fallback for
+              // games whose sync captured no artwork). Steam rows know it
+              // from extKey; other platforms get it from the rating cache.
+              steamAppId: z.string().nullable(),
             }),
           ),
         }),
@@ -7883,8 +7906,8 @@ export const Actions = {
       // Reading the cache here means ratings show on load without any HTTP;
       // a first-time library simply has null until the client resolves it.
       const ratingRows = await db.select().from(schema.steamRatings);
-      const ratingByKey = new Map(ratingRows.map((r) => [r.key, r.score]));
-      const ratingFor = (title: string): number | null => {
+      const ratingByKey = new Map(ratingRows.map((r) => [r.key, r]));
+      const ratingFor = (title: string) => {
         const k = normName(baseTitle(title));
         return k ? (ratingByKey.get(k) ?? null) : null;
       };
@@ -7903,6 +7926,8 @@ export const Actions = {
         dealId: number | null;
         devicePlatforms: ("pc" | "mobile")[];
         rating: number | null;
+        ratingCount: number | null;
+        steamAppId: string | null;
       };
       // Official store links are built ONLY from identifiers captured at
       // sync time. Steam: the appid IS the extKey → the canonical app
@@ -7933,10 +7958,23 @@ export const Actions = {
         ["legacy", []],
       ]);
       for (const it of items) {
+        const rate = ratingFor(it.title);
+        // Steam id for this game: the row's own extKey when the platform is
+        // Steam, otherwise whatever the rating cache matched by title. Used
+        // both for the cover fallback below and for the client's own retry
+        // chain when the stored artwork 404s.
+        const steamId =
+          it.platform === "steam" && /^\d+$/.test(it.extKey ?? "") ? (it.extKey as string) : (rate?.appid ?? null);
         byGroup.get(it.platform)?.push({
           key: `item-${it.id}`,
           title: it.title,
-          imageUrl: normalizeLibraryCover(it.platform, it.imageUrl ?? null, it.extKey ?? null),
+          // A row with no artwork of its own still has a deterministic Steam
+          // portrait capsule when its appid is known — prefer that over the
+          // letter placeholder. SafeImg falls back further (header, capsule)
+          // if this particular app has no portrait asset.
+          imageUrl:
+            normalizeLibraryCover(it.platform, it.imageUrl ?? null, it.extKey ?? null) ??
+            (steamId ? steamLibraryCover(steamId) : null),
           playtimeMinutes: it.playtimeMinutes ?? null,
           playtimeUpdatedAt: it.playtimeUpdatedAt ? new Date(it.playtimeUpdatedAt).toISOString() : null,
           // The platform's own acquisition date when it reports one
@@ -7958,7 +7996,9 @@ export const Actions = {
                   .split(",")
                   .filter((p): p is "pc" | "mobile" => p === "pc" || p === "mobile")
               : [],
-          rating: ratingFor(it.title),
+          rating: rate?.score ?? null,
+          ratingCount: rate?.reviewCount ?? null,
+          steamAppId: steamId,
         });
       }
       const claimedAtByDeal = new Map<number, string>();
@@ -8059,10 +8099,12 @@ export const Actions = {
         }
         if (keys.some((k) => seen.has(k))) return;
         for (const k of keys) seen.add(k);
+        const claimedRate = ratingFor(d.title) ?? ratingFor(claimedTitle);
+        const claimedSteamId = claimedRate?.appid ?? null;
         const entry: LibEntry = {
           key: `deal-${d.id}`,
           title: claimedTitle,
-          imageUrl: d.imageUrl ?? null,
+          imageUrl: d.imageUrl ?? (claimedSteamId ? steamLibraryCover(claimedSteamId) : null),
           playtimeMinutes: null,
           playtimeUpdatedAt: null,
           addedAt: claimedAtByDeal.get(d.id) ?? null,
@@ -8072,7 +8114,9 @@ export const Actions = {
           itemId: null,
           dealId: d.id,
           devicePlatforms: [],
-          rating: ratingFor(d.title) ?? ratingFor(claimedTitle),
+          rating: claimedRate?.score ?? null,
+          ratingCount: claimedRate?.reviewCount ?? null,
+          steamAppId: claimedSteamId,
         };
         byGroup.get(group)?.push(entry);
         for (const k of keys) idx.set(k, entry);
@@ -8137,7 +8181,7 @@ export const Actions = {
   }),
 
   libraryRatings: defineAction({
-    description: "Resolves each game library title's Metacritic score from its Steam store page — the single ranking number shared by every platform (Steam/Epic/GOG/claimed/manual). Results are cached globally by normalized title: a found score is kept ~180 days, and a title with no Steam match/no Metacritic score is kept as a miss ~30 days, so opening the library never refetches the whole catalog. Steam appids captured at sync are used directly; other platforms are matched by exact-then-prefix title on the Steam store search. Returns score 0-100 or null (unmatched); the client sorts by score descending with nulls last and shows the number on each cover.",
+    description: "Resolves each game library title's Steam player-review percentage — the single ranking number shared by every platform (Steam/Epic/GOG/claimed/manual). The value is the all-language 'NN% of the N user reviews for this game are positive' figure from the game's Steam store page (the appreviews JSON endpoint is unreachable from this host). Results are cached globally by normalized title: a found percentage is kept ~180 days, a title with no Steam match/no reviews is kept as a miss ~30 days, so opening the library never refetches the whole catalog. Steam appids captured at sync are used directly; other platforms are matched by exact-then-prefix title on the Steam store search. Returns score 0-100 (the percentage) plus reviewCount, or null for unmatched; the client sorts by score descending with nulls last and prints the percentage on each cover.",
     request: z.object({
       games: z.array(
         z.object({
@@ -8149,7 +8193,11 @@ export const Actions = {
     }),
     response: z.object({
       ratings: z.array(
-        z.object({ title: z.string(), score: z.number().nullable() }),
+        z.object({
+          title: z.string(),
+          score: z.number().nullable(),
+          reviewCount: z.number().nullable(),
+        }),
       ),
     }),
     async handler(ctx, args) {
@@ -8166,8 +8214,9 @@ export const Actions = {
         if (k && !unique.has(k)) unique.set(k, { title: g.title, appid: g.appid ?? null });
       }
 
-      const resolved = new Map<string, number | null>();
-      // Bounded parallelism: Steam sees at most 4 concurrent lookups.
+      const resolved = new Map<string, { score: number | null; reviewCount: number | null }>();
+      // Bounded parallelism: the storefront tolerates ~8 concurrent page
+      // fetches from one IP; more than that starts dropping connections.
       const queue = [...unique.entries()];
       let cursor = 0;
       const worker = async () => {
@@ -8178,36 +8227,46 @@ export const Actions = {
           const hit = cache.get(key);
           const fresh = hit && (hit.score != null ? now - hit.checkedAt < FOUND_TTL : now - hit.checkedAt < MISS_TTL);
           if (fresh) {
-            resolved.set(key, hit!.score);
+            resolved.set(key, { score: hit!.score, reviewCount: hit!.reviewCount ?? null });
             continue;
           }
           let score: number | null = null;
+          let reviewCount: number | null = null;
           let appid = game.appid;
-          if (appid && /^\d+$/.test(appid)) score = await fetchSteamMetacriticByAppid(appid);
+          if (appid && /^\d+$/.test(appid)) {
+            const r = await fetchSteamReviewByAppid(appid);
+            score = r.pct;
+            reviewCount = r.count;
+          }
           if (score == null) {
-            const byTitle = await fetchSteamMetacriticByTitle(game.title);
+            const byTitle = await fetchSteamReviewByTitle(game.title);
             if (byTitle) {
-              score = byTitle.score;
+              score = byTitle.pct;
+              reviewCount = byTitle.count;
               appid = byTitle.appid ?? appid;
             }
           }
-          resolved.set(key, score);
+          resolved.set(key, { score, reviewCount });
           await db
             .insert(schema.steamRatings)
-            .values({ key, score, appid, checkedAt: Date.now() })
+            .values({ key, score, reviewCount, appid, checkedAt: Date.now() })
             .onConflictDoUpdate({
               target: schema.steamRatings.key,
-              set: { score, appid, checkedAt: Date.now() },
+              set: { score, reviewCount, appid, checkedAt: Date.now() },
             });
         }
       };
-      await Promise.all([worker(), worker(), worker(), worker()]);
+      await Promise.all(Array.from({ length: 8 }, () => worker()));
 
       return {
-        ratings: args.games.map((g) => ({
-          title: g.title,
-          score: resolved.get(normName(baseTitle(g.title))) ?? null,
-        })),
+        ratings: args.games.map((g) => {
+          const hit = resolved.get(normName(baseTitle(g.title)));
+          return {
+            title: g.title,
+            score: hit?.score ?? null,
+            reviewCount: hit?.reviewCount ?? null,
+          };
+        }),
       };
     },
   }),

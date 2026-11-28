@@ -519,6 +519,7 @@ function SafeImg({
   phFontSize,
   loading,
   decoding,
+  fallbacks,
 }: {
   src: string | null | undefined;
   alt: string;
@@ -528,16 +529,34 @@ function SafeImg({
   phFontSize?: number;
   loading?: "lazy" | "eager";
   decoding?: "async" | "auto" | "sync";
+  // Tried in order after `src` when it 404s. Library covers use this to walk
+  // Steam's portrait → header → capsule artwork before falling back to the
+  // letter plate, so a game whose stored cover is missing still shows art.
+  fallbacks?: (string | null | undefined)[];
 }) {
-  const [badSrc, setBadSrc] = useState<string | null>(null);
-  if (!src || badSrc === src) {
+  const [dead, setDead] = useState<string[]>([]);
+  const candidates = [src, ...(fallbacks ?? [])].filter(
+    (u): u is string => typeof u === "string" && u.length > 0 && !dead.includes(u),
+  );
+  const usable = candidates[0];
+  if (!usable) {
     return (
       <div aria-hidden="true" className={`${className ?? ""} flex items-center justify-center font-serif font-bold text-[var(--dim)]`} style={style}>
         <span style={phFontSize ? { fontSize: phFontSize } : undefined}>{(label.replace(/[《》]/g, "").trim()[0] ?? "游").toUpperCase()}</span>
       </div>
     );
   }
-  return <img src={src} alt={alt} className={className} style={style} loading={loading} decoding={decoding} onError={() => setBadSrc(src)} />;
+  return (
+    <img
+      src={usable}
+      alt={alt}
+      className={className}
+      style={style}
+      loading={loading}
+      decoding={decoding}
+      onError={() => setDead((d) => (d.includes(usable) ? d : [...d, usable]))}
+    />
+  );
 }
 
 function CoverTile({ deal, size }: { deal: Deal; size: number }) {
@@ -6879,18 +6898,46 @@ function libOriginLabel(origin: LibraryEntry["origin"]): string {
   return origin === "sync" ? "平台同步入库" : origin === "claimed" ? "领取入库" : "手动添加（早期）";
 }
 
-/** Steam Metacritic score chip shown on library covers / rows — green ≥75,
- *  amber ≥50, red below, and a neutral dash for an unresolved score. */
-function RatingBadge({ score, className }: { score: number | null; className?: string }) {
-  const tone = score == null ? "var(--dim2)" : score >= 75 ? "#57d99b" : score >= 50 ? "#f2c14e" : "#f07a7a";
+/** Steam review percentage chip shown on library covers / rows. The number
+ *  is the all-language share of positive reviews on the game's Steam page —
+ *  green ≥90, cool blue ≥70, amber ≥40, red below, neutral dash when the
+ *  game has no Steam review data at all. Fixed 15px height so it lines up
+ *  exactly with the playtime chip on the opposite corner of a cover. */
+function ratingTone(score: number): string {
+  return score >= 90 ? "#57d99b" : score >= 70 ? "#7fd4ff" : score >= 40 ? "#f2c14e" : "#f07a7a";
+}
+
+function RatingBadge({ score, count, className }: { score: number | null; count?: number | null; className?: string }) {
+  const tone = score == null ? "var(--dim2)" : ratingTone(score);
+  const title =
+    score == null
+      ? "Steam 好评率：暂无数据"
+      : `Steam 好评率 ${score}%${count ? ` · ${count.toLocaleString("zh-CN")} 篇评测` : ""}`;
   return (
-    <span className={`img-chip inline-flex flex-none items-center gap-[3px] rounded-full px-[7px] py-[3px] font-mono text-[9px] font-bold leading-none ${className ?? ""}`} title={score == null ? "Steam 评分：暂无" : `Steam / Metacritic 评分 ${score}/100`}>
-      <svg viewBox="0 0 24 24" className="h-[9px] w-[9px]" style={{ fill: tone }} aria-hidden="true">
-        <path d="M12 2l2.9 6.26 6.86.75-5.12 4.6 1.42 6.74L12 17.05l-6.06 3.3 1.42-6.74-5.12-4.6 6.86-.75z" />
+    <span
+      title={title}
+      aria-label={title}
+      className={`img-chip inline-flex h-[15px] flex-none items-center gap-[3px] rounded-full px-[6px] font-mono text-[9px] font-bold leading-none ${className ?? ""}`}
+    >
+      <svg viewBox="0 0 24 24" className="h-[9px] w-[9px] flex-none" fill="none" stroke={tone} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M7 21.5V11M7 11l4.1-8a1.7 1.7 0 0 1 3.1 1.1V9h4.5a2 2 0 0 1 1.96 2.4l-1.2 6.9a2 2 0 0 1-1.97 1.7H7" />
       </svg>
-      <span style={{ color: tone }}>{score == null ? "—" : score}</span>
+      <span style={{ color: tone }}>{score == null ? "—" : `${score}%`}</span>
     </span>
   );
+}
+
+/** Extra Steam CDN artwork to try when a library cover is missing or dead.
+ *  Portrait capsule (the stored URL) is preferred; header and the small
+ *  capsule are near-universal fallbacks, and they exist for DLC/tool entries
+ *  that have no portrait asset — the case that used to show a bare letter. */
+function steamCoverFallbacks(entry: LibraryEntry): string[] {
+  const id = entry.steamAppId ?? entry.storeUrl?.match(/\/app\/(\d+)/)?.[1] ?? null;
+  if (!id) return [];
+  return [
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${id}/header.jpg`,
+    `https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/${id}/capsule_231x87.jpg`,
+  ];
 }
 
 function sortLibEntries(entries: LibraryEntry[], sort: LibSort): LibraryEntry[] {
@@ -6987,12 +7034,12 @@ function LibraryEntryRow({ entry, onRemoveClaimed, onOpen, authToken }: { entry:
       }}
       className="flex cursor-pointer items-center gap-3 rounded-[14px] border border-[var(--border)] bg-[var(--surface)] p-[9px] shadow-[var(--glass-hi)] backdrop-blur-md"
     >
-      <SafeImg src={entry.imageUrl} alt="" label={entry.title} phFontSize={20} className="h-[54px] w-[54px] flex-none rounded-[10px] bg-[var(--surface2)] object-cover" loading="lazy" decoding="async" />
+      <SafeImg src={entry.imageUrl} fallbacks={steamCoverFallbacks(entry)} alt="" label={entry.title} phFontSize={20} className="h-[54px] w-[54px] flex-none rounded-[10px] bg-[var(--surface2)] object-cover" loading="lazy" decoding="async" />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <h4 className="min-w-0 truncate text-[13px] font-bold leading-[1.3] text-[var(--text)]">{entry.title}</h4>
           <DevicePlatformMarks platforms={entry.devicePlatforms} />
-          <RatingBadge score={entry.rating} className="ml-auto" />
+          <RatingBadge score={entry.rating} count={entry.ratingCount} className="ml-auto" />
         </div>
         <p className="mt-1 font-mono text-[9.5px] uppercase tracking-[0.03em] text-[var(--dim2)]">
           {entry.origin === "sync" ? "同步" : entry.origin === "claimed" ? "已领" : "手动"}
@@ -7042,13 +7089,18 @@ function LibraryEntryGridCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: 
       }}
       className="relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] shadow-[var(--glass-hi)]"
     >
-      <SafeImg src={entry.imageUrl} alt="" label={entry.title} phFontSize={30} className="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async" />
-      <span className="absolute left-1.5 top-1.5 z-[2]"><RatingBadge score={entry.rating} /></span>
-      {entry.playtimeMinutes != null ? (
-        <span className="img-chip absolute right-1.5 top-1.5 z-[2] rounded-full px-1.5 py-[3px] font-mono text-[9px] leading-none">
-          {playtimeLabel(entry.playtimeMinutes)}
-        </span>
-      ) : null}
+      <SafeImg src={entry.imageUrl} fallbacks={steamCoverFallbacks(entry)} alt="" label={entry.title} phFontSize={30} className="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async" />
+      {/* One flex row for both chips: same top edge, same 15px height, so the
+          rating and the playtime always sit on one visual line no matter how
+          wide either label is. */}
+      <span className="absolute inset-x-1.5 top-1.5 z-[2] flex items-center justify-between gap-1">
+        <RatingBadge score={entry.rating} count={entry.ratingCount} />
+        {entry.playtimeMinutes != null ? (
+          <span className="img-chip inline-flex h-[15px] flex-none items-center rounded-full px-[6px] font-mono text-[9px] leading-none">
+            {playtimeLabel(entry.playtimeMinutes)}
+          </span>
+        ) : null}
+      </span>
       {entry.devicePlatforms.length > 0 ? (
         <span className="absolute bottom-1.5 right-1.5 z-[2]">
           <DevicePlatformMarks platforms={entry.devicePlatforms} />
@@ -7078,7 +7130,7 @@ function LibraryEntryCompactRow({ entry, onOpen }: { entry: LibraryEntry; onOpen
     >
       <h4 className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text)]">{entry.title}</h4>
       <DevicePlatformMarks platforms={entry.devicePlatforms} />
-      <RatingBadge score={entry.rating} />
+      <RatingBadge score={entry.rating} count={entry.ratingCount} />
       <span className="flex-none font-mono text-[9.5px] text-[var(--dim2)]">{playtimeLabel(entry.playtimeMinutes)}</span>
     </div>
   );
@@ -7161,7 +7213,7 @@ function LibraryGameDetail({
       <div className="mx-auto w-full max-w-3xl px-4 pb-14">
         {entry.imageUrl ? (
           <div className="relative aspect-[16/9] w-full overflow-hidden rounded-[20px] border border-[var(--border)] bg-[var(--surface2)]">
-            <SafeImg src={entry.imageUrl} alt={entry.title} label={entry.title} phFontSize={60} className="absolute inset-0 h-full w-full bg-[var(--surface2)] object-cover" />
+            <SafeImg src={entry.imageUrl} fallbacks={steamCoverFallbacks(entry)} alt={entry.title} label={entry.title} phFontSize={60} className="absolute inset-0 h-full w-full bg-[var(--surface2)] object-cover" />
           </div>
         ) : (
           <div aria-hidden="true" className="flex aspect-[16/9] w-full items-center justify-center rounded-[20px] border border-[var(--border)] bg-[var(--surface2)] font-serif text-6xl font-black text-[var(--dim2)]">
@@ -7181,7 +7233,7 @@ function LibraryGameDetail({
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           <span className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-[7px] py-[5px] font-mono text-[9.5px] leading-none text-[var(--accent)]">{groupName}</span>
           <span className="rounded-[8px] border border-[var(--border)] px-[7px] py-[5px] font-mono text-[9.5px] leading-none text-[var(--dim)]">{libOriginLabel(entry.origin)}</span>
-          <RatingBadge score={entry.rating} />
+          <RatingBadge score={entry.rating} count={entry.ratingCount} />
         </div>
         <dl className="mt-5 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-sm shadow-[var(--glass-hi)] backdrop-blur-md">
           <div className="flex justify-between gap-4">
@@ -7189,10 +7241,15 @@ function LibraryGameDetail({
             <dd className="text-right text-[var(--text)]">{groupName}</dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="shrink-0 text-[var(--dim)]">Steam 评分</dt>
+            <dt className="shrink-0 text-[var(--dim)]">Steam 好评率</dt>
             <dd className="text-right text-[var(--text)]">
               {entry.rating != null ? (
-                <><RatingBadge score={entry.rating} /> <span className="ml-1 font-mono text-[11px] text-[var(--dim2)]">/100</span></>
+                <>
+                  <span className="font-mono font-bold" style={{ color: ratingTone(entry.rating) }}>{entry.rating}%</span>
+                  {entry.ratingCount ? (
+                    <span className="ml-1.5 font-mono text-[11px] text-[var(--dim2)]">{entry.ratingCount.toLocaleString("zh-CN")} 篇评测</span>
+                  ) : null}
+                </>
               ) : (
                 <span className="text-[var(--dim)]">暂无 / 未收录</span>
               )}
@@ -7539,16 +7596,14 @@ function MinePage({
   const primeLeft = primeQueueQuery.data?.items.length ?? 0;
   const openStatus = openPanel ? (data?.platforms ?? []).find((s) => s.platform === openPanel) ?? null : null;
 
-  // Resolve Steam Metacritic scores for every library game. The server caches
-  // each title globally, so this only does real Steam requests for new games;
-  // on success we refetch the library so the fresh scores show on covers and
-  // the "按评分" sort is immediately correct. A ref guards against refetch
-  // loops and against re-running for an unchanged library.
+  // Resolve Steam review percentages for every library game. Titles are
+  // cached server-side, so only unseen games cost a real fetch — but each one
+  // is a full Steam store page, so the work is streamed in small batches
+  // instead of one giant request that would outlive the client timeout. Each
+  // finished batch refetches the library, so percentages fill in
+  // progressively and the "按好评率" sort is correct as soon as its games land.
   const ratingsSigRef = useRef<string | null>(null);
-  const resolveRatings = useMutation({
-    mutationFn: (games: { title: string; appid: string | null }[]) => api.libraryRatings({ games }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library", session?.username ?? ""] }),
-  });
+  const ratingsRoundRef = useRef(0);
   useEffect(() => {
     if (!libraryQuery.data) return;
     const games = groups.flatMap((g) =>
@@ -7561,7 +7616,26 @@ function MinePage({
     const sig = games.map((x) => `${x.title}\u0000${x.appid ?? ""}`).join("\u0001");
     if (ratingsSigRef.current === sig) return;
     ratingsSigRef.current = sig;
-    resolveRatings.mutate(games);
+    const round = ++ratingsRoundRef.current;
+    const queue = [...games];
+    const BATCH = 40;
+    const pump = async () => {
+      while (queue.length) {
+        // A newer library replaced this run — stop feeding stale titles.
+        if (ratingsRoundRef.current !== round) return;
+        const batch = queue.splice(0, BATCH);
+        try {
+          await api.libraryRatings({ games: batch });
+        } catch {
+          // Backend busy or offline: keep whatever resolved so far and let
+          // the next library open continue where this one stopped (the
+          // server cached every game it did reach).
+          return;
+        }
+        queryClient.invalidateQueries({ queryKey: ["library", session?.username ?? ""] });
+      }
+    };
+    void pump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [libraryQuery.data, groups]);
 
@@ -7992,7 +8066,7 @@ function MinePage({
           className="h-8 rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 text-[11px] font-medium text-[var(--dim)] backdrop-blur-md"
         >
           <option value="default">默认排序</option>
-          <option value="rating">按评分</option>
+          <option value="rating">按好评率</option>
           <option value="playtime">按游戏时长</option>
           <option value="name">按名称</option>
           <option value="recent">按最近入库</option>
