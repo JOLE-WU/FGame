@@ -2195,6 +2195,86 @@ async function fetchSteamAppDetail(appid: string): Promise<LibGameDetail | null>
   };
 }
 
+// ---------- Steam Metacritic score resolution for the game library ----------
+// Every library game (whatever platform it came from) is ranked by the SAME
+// number: its Metacritic score as published on its Steam store page. Steam's
+// storesearch already carries `metascore` per item, so one request per title
+// is usually enough; appdetails' `metacritic.score` is the fallback. Nothing
+// is guessed — a title with no Steam match (or no Metacritic score) returns
+// null and is cached as a miss so it is not refetched on every library open.
+
+type SteamRating = { score: number | null; appid: string | null };
+
+function numScore(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100) return Math.round(v);
+  if (typeof v === "string" && v.trim()) {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0 && n <= 100) return Math.round(n);
+  }
+  return null;
+}
+
+async function fetchSteamMetacriticByAppid(appid: string): Promise<number | null> {
+  try {
+    const res = await fetch(
+      `https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=us&l=schinese`,
+      { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as Record<string, unknown>;
+    const entry = data[appid] as Record<string, unknown> | undefined;
+    const d = entry?.data as Record<string, unknown> | undefined;
+    const mc = d?.metacritic as Record<string, unknown> | undefined;
+    return numScore(mc?.score);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchSteamMetacriticByTitle(title: string): Promise<SteamRating | null> {
+  const clean = baseTitle(title).trim();
+  if (clean.length < 2) return null;
+  const words = clean.split(" ");
+  const candidates = [
+    clean,
+    clean.split(/\s[-–:]\s/)[0] ?? clean,
+    words.length > 2 ? words.slice(0, -1).join(" ") : "",
+  ].filter((v, i, a) => v.trim().length >= 2 && a.indexOf(v) === i);
+  // English storefront first (best Metacritic coverage), then Chinese for
+  // titles that are only indexed under their localized name.
+  for (const locale of [
+    { l: "en", cc: "US" },
+    { l: "schinese", cc: "cn" },
+  ]) {
+    for (const cand of candidates) {
+      try {
+        const sres = await fetch(
+          `https://store.steampowered.com/api/storesearch/?term=${encodeURIComponent(cand)}&l=${locale.l}&cc=${locale.cc}`,
+          { headers: { "User-Agent": "Mozilla/5.0" }, signal: AbortSignal.timeout(8000) },
+        );
+        if (!sres.ok) continue;
+        const sdata = (await sres.json()) as Record<string, unknown>;
+        const items = Array.isArray(sdata.items) ? (sdata.items as Record<string, unknown>[]) : [];
+        if (items.length === 0) continue;
+        const want = normName(cand);
+        const exact = items.find((i) => normName(String(i?.name ?? "")) === want);
+        const startsWith = items.find((i) => normName(String(i?.name ?? "")).startsWith(want.slice(0, 8)));
+        const pick = exact ?? startsWith;
+        if (!pick || typeof pick.id !== "number") continue;
+        const appid = String(pick.id);
+        const fromSearch = numScore(pick.metascore);
+        if (fromSearch != null) return { score: fromSearch, appid };
+        // Search had no metascore — confirm from the app's own page.
+        const fromDetail = await fetchSteamMetacriticByAppid(appid);
+        return { score: fromDetail, appid };
+      } catch {
+        // try next candidate / locale
+      }
+    }
+  }
+  return null;
+}
+
 async function fetchEpicProductDetail(slug: string): Promise<LibGameDetail | null> {
   for (const locale of ["zh-CN", "en-US"] as const) {
     try {
@@ -7759,13 +7839,17 @@ export const Actions = {
               // both). Empty for Steam/GOG, claimed and manual entries
               // — the UI renders the mark only for Epic sync rows.
               devicePlatforms: z.array(z.enum(["pc", "mobile"])),
+              // Steam Metacritic score (0-100) for this game, resolved from
+              // the global cache by normalized title. Null until resolved or
+              // when the game has no Steam/Metacritic entry.
+              rating: z.number().nullable(),
             }),
           ),
         }),
       ),
       prefs: z.object({
         view: z.enum(["list", "grid", "compact"]),
-        sort: z.enum(["default", "playtime", "name", "recent"]),
+        sort: z.enum(["default", "playtime", "name", "recent", "rating"]),
         // Platform groups the account keeps folded on the Mine page
         // (group keys: epic / steam / gog / amazon / legacy). Default
         // is empty = everything expanded.
@@ -7795,6 +7879,15 @@ export const Actions = {
         .where(and(eq(schema.marks.kind, "claimed"), eq(schema.marks.userId, uid)));
       const claimedIds = new Set(claimedRows.map((m) => m.dealId));
       const dealRows = await db.select().from(schema.deals);
+      // Steam Metacritic scores cached by normalized title (see libraryRatings).
+      // Reading the cache here means ratings show on load without any HTTP;
+      // a first-time library simply has null until the client resolves it.
+      const ratingRows = await db.select().from(schema.steamRatings);
+      const ratingByKey = new Map(ratingRows.map((r) => [r.key, r.score]));
+      const ratingFor = (title: string): number | null => {
+        const k = normName(baseTitle(title));
+        return k ? (ratingByKey.get(k) ?? null) : null;
+      };
       type LibGroup = "epic" | "steam" | "gog" | "amazon" | "legacy";
       type LibEntry = {
         key: string;
@@ -7809,6 +7902,7 @@ export const Actions = {
         itemId: number | null;
         dealId: number | null;
         devicePlatforms: ("pc" | "mobile")[];
+        rating: number | null;
       };
       // Official store links are built ONLY from identifiers captured at
       // sync time. Steam: the appid IS the extKey → the canonical app
@@ -7864,6 +7958,7 @@ export const Actions = {
                   .split(",")
                   .filter((p): p is "pc" | "mobile" => p === "pc" || p === "mobile")
               : [],
+          rating: ratingFor(it.title),
         });
       }
       const claimedAtByDeal = new Map<number, string>();
@@ -7977,6 +8072,7 @@ export const Actions = {
           itemId: null,
           dealId: d.id,
           devicePlatforms: [],
+          rating: ratingFor(d.title) ?? ratingFor(claimedTitle),
         };
         byGroup.get(group)?.push(entry);
         for (const k of keys) idx.set(k, entry);
@@ -8016,12 +8112,12 @@ export const Actions = {
         .filter((g) => (g.platform === "amazon" || g.platform === "legacy" ? g.entries.length > 0 : true));
       // Library view/sort preferences are remembered per account (meta,
       // keyed by owner id — the legacy pool is owner 0).
-      let prefs = { view: "list" as "list" | "grid" | "compact", sort: "default" as "default" | "playtime" | "name" | "recent", folded: [] as string[] };
+      let prefs = { view: "list" as "list" | "grid" | "compact", sort: "default" as "default" | "playtime" | "name" | "recent" | "rating", folded: [] as string[] };
       const prefRows = await db.select().from(schema.meta).where(eq(schema.meta.key, `lib_prefs_${uid}`));
       try {
         const raw = prefRows[0]?.value ? (JSON.parse(prefRows[0].value) as Record<string, unknown>) : {};
         if (raw.view === "grid" || raw.view === "compact" || raw.view === "list") prefs.view = raw.view;
-        if (raw.sort === "playtime" || raw.sort === "name" || raw.sort === "recent" || raw.sort === "default") prefs.sort = raw.sort;
+        if (raw.sort === "playtime" || raw.sort === "name" || raw.sort === "recent" || raw.sort === "default" || raw.sort === "rating") prefs.sort = raw.sort;
         if (Array.isArray(raw.folded)) {
           prefs.folded = raw.folded.filter(
             (g): g is string => typeof g === "string" && ["epic", "steam", "gog", "amazon", "legacy"].includes(g),
@@ -8040,11 +8136,87 @@ export const Actions = {
     },
   }),
 
+  libraryRatings: defineAction({
+    description: "Resolves each game library title's Metacritic score from its Steam store page — the single ranking number shared by every platform (Steam/Epic/GOG/claimed/manual). Results are cached globally by normalized title: a found score is kept ~180 days, and a title with no Steam match/no Metacritic score is kept as a miss ~30 days, so opening the library never refetches the whole catalog. Steam appids captured at sync are used directly; other platforms are matched by exact-then-prefix title on the Steam store search. Returns score 0-100 or null (unmatched); the client sorts by score descending with nulls last and shows the number on each cover.",
+    request: z.object({
+      games: z.array(
+        z.object({
+          title: z.string().min(1),
+          // Steam rows carry their appid at sync — resolve without a search.
+          appid: z.string().nullable().optional(),
+        }),
+      ).max(600),
+    }),
+    response: z.object({
+      ratings: z.array(
+        z.object({ title: z.string(), score: z.number().nullable() }),
+      ),
+    }),
+    async handler(ctx, args) {
+      const db = ctx.db<typeof schema>();
+      const FOUND_TTL = 180 * 24 * 3600 * 1000;
+      const MISS_TTL = 30 * 24 * 3600 * 1000;
+      const now = Date.now();
+      const cacheRows = await db.select().from(schema.steamRatings);
+      const cache = new Map(cacheRows.map((r) => [r.key, r]));
+
+      const unique = new Map<string, { title: string; appid: string | null }>();
+      for (const g of args.games) {
+        const k = normName(baseTitle(g.title));
+        if (k && !unique.has(k)) unique.set(k, { title: g.title, appid: g.appid ?? null });
+      }
+
+      const resolved = new Map<string, number | null>();
+      // Bounded parallelism: Steam sees at most 4 concurrent lookups.
+      const queue = [...unique.entries()];
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < queue.length) {
+          const item = queue[cursor++];
+          if (!item) break;
+          const [key, game] = item;
+          const hit = cache.get(key);
+          const fresh = hit && (hit.score != null ? now - hit.checkedAt < FOUND_TTL : now - hit.checkedAt < MISS_TTL);
+          if (fresh) {
+            resolved.set(key, hit!.score);
+            continue;
+          }
+          let score: number | null = null;
+          let appid = game.appid;
+          if (appid && /^\d+$/.test(appid)) score = await fetchSteamMetacriticByAppid(appid);
+          if (score == null) {
+            const byTitle = await fetchSteamMetacriticByTitle(game.title);
+            if (byTitle) {
+              score = byTitle.score;
+              appid = byTitle.appid ?? appid;
+            }
+          }
+          resolved.set(key, score);
+          await db
+            .insert(schema.steamRatings)
+            .values({ key, score, appid, checkedAt: Date.now() })
+            .onConflictDoUpdate({
+              target: schema.steamRatings.key,
+              set: { score, appid, checkedAt: Date.now() },
+            });
+        }
+      };
+      await Promise.all([worker(), worker(), worker(), worker()]);
+
+      return {
+        ratings: args.games.map((g) => ({
+          title: g.title,
+          score: resolved.get(normName(baseTitle(g.title))) ?? null,
+        })),
+      };
+    },
+  }),
+
   saveLibraryPrefs: defineAction({
     description: "Remembers the signed-in account's game-library view mode (list / grid / compact), sort order (default / playtime / name / recent) and folded platform groups server-side, so the choices are restored on the next visit and on other devices. Omitted fields keep their stored values.",
     request: z.object({
       view: z.enum(["list", "grid", "compact"]),
-      sort: z.enum(["default", "playtime", "name", "recent"]),
+      sort: z.enum(["default", "playtime", "name", "recent", "rating"]),
       folded: z.array(z.enum(["epic", "steam", "gog", "amazon", "legacy"])).optional(),
       ...authArg,
     }),

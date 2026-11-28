@@ -196,6 +196,18 @@ export const libraryItems = sqliteTable(
 );
 
 // iOS apps whose App Store price is tracked daily (fixed watchlist + in-feed matches).
+// Global (not per-user) cache of a game's Steam Metacritic score, keyed by
+// the normalized base title so every library source — Steam synced rows,
+// Epic/GOG synced rows, claimed deals, manual entries — resolves to the same
+// number. score=null means the title was searched on Steam but no Metacritic
+// score exists; it is cached as a miss and retried only after a longer TTL.
+export const steamRatings = sqliteTable("steam_ratings", {
+  key: text("key").primaryKey(),
+  score: integer("score"),
+  appid: text("appid"),
+  checkedAt: integer("checked_at").notNull(),
+});
+
 export const appWatch = sqliteTable("app_watch", {
   trackId: integer("track_id").primaryKey(),
   name: text("name").notNull(),

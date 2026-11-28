@@ -6855,7 +6855,7 @@ function PlatformLoginPanel({
 }
 
 type LibView = "list" | "grid" | "compact";
-type LibSort = "default" | "playtime" | "name" | "recent";
+type LibSort = "default" | "playtime" | "name" | "recent" | "rating";
 type LibGroupKey = LibraryGroup["platform"];
 
 /** Full playtime label for library entries: real hours, 未玩过 for a
@@ -6879,10 +6879,27 @@ function libOriginLabel(origin: LibraryEntry["origin"]): string {
   return origin === "sync" ? "平台同步入库" : origin === "claimed" ? "领取入库" : "手动添加（早期）";
 }
 
+/** Steam Metacritic score chip shown on library covers / rows — green ≥75,
+ *  amber ≥50, red below, and a neutral dash for an unresolved score. */
+function RatingBadge({ score, className }: { score: number | null; className?: string }) {
+  const tone = score == null ? "var(--dim2)" : score >= 75 ? "#57d99b" : score >= 50 ? "#f2c14e" : "#f07a7a";
+  return (
+    <span className={`img-chip inline-flex flex-none items-center gap-[3px] rounded-full px-[7px] py-[3px] font-mono text-[9px] font-bold leading-none ${className ?? ""}`} title={score == null ? "Steam 评分：暂无" : `Steam / Metacritic 评分 ${score}/100`}>
+      <svg viewBox="0 0 24 24" className="h-[9px] w-[9px]" style={{ fill: tone }} aria-hidden="true">
+        <path d="M12 2l2.9 6.26 6.86.75-5.12 4.6 1.42 6.74L12 17.05l-6.06 3.3 1.42-6.74-5.12-4.6 6.86-.75z" />
+      </svg>
+      <span style={{ color: tone }}>{score == null ? "—" : score}</span>
+    </span>
+  );
+}
+
 function sortLibEntries(entries: LibraryEntry[], sort: LibSort): LibraryEntry[] {
   if (sort === "default") return entries;
   const arr = [...entries];
-  if (sort === "playtime") {
+  if (sort === "rating") {
+    // Highest Steam score first; unmatched games (null) always last.
+    arr.sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || a.title.localeCompare(b.title, "zh"));
+  } else if (sort === "playtime") {
     arr.sort((a, b) => (b.playtimeMinutes ?? -1) - (a.playtimeMinutes ?? -1) || a.title.localeCompare(b.title, "zh"));
   } else if (sort === "name") {
     arr.sort((a, b) => a.title.localeCompare(b.title, "zh"));
@@ -6975,6 +6992,7 @@ function LibraryEntryRow({ entry, onRemoveClaimed, onOpen, authToken }: { entry:
         <div className="flex items-center gap-1.5">
           <h4 className="min-w-0 truncate text-[13px] font-bold leading-[1.3] text-[var(--text)]">{entry.title}</h4>
           <DevicePlatformMarks platforms={entry.devicePlatforms} />
+          <RatingBadge score={entry.rating} className="ml-auto" />
         </div>
         <p className="mt-1 font-mono text-[9.5px] uppercase tracking-[0.03em] text-[var(--dim2)]">
           {entry.origin === "sync" ? "同步" : entry.origin === "claimed" ? "已领" : "手动"}
@@ -7025,6 +7043,7 @@ function LibraryEntryGridCard({ entry, onOpen }: { entry: LibraryEntry; onOpen: 
       className="relative aspect-[3/4] cursor-pointer overflow-hidden rounded-[14px] border border-[var(--border)] bg-[var(--surface2)] shadow-[var(--glass-hi)]"
     >
       <SafeImg src={entry.imageUrl} alt="" label={entry.title} phFontSize={30} className="absolute inset-0 h-full w-full object-cover" loading="lazy" decoding="async" />
+      <span className="absolute left-1.5 top-1.5 z-[2]"><RatingBadge score={entry.rating} /></span>
       {entry.playtimeMinutes != null ? (
         <span className="img-chip absolute right-1.5 top-1.5 z-[2] rounded-full px-1.5 py-[3px] font-mono text-[9px] leading-none">
           {playtimeLabel(entry.playtimeMinutes)}
@@ -7059,6 +7078,7 @@ function LibraryEntryCompactRow({ entry, onOpen }: { entry: LibraryEntry; onOpen
     >
       <h4 className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--text)]">{entry.title}</h4>
       <DevicePlatformMarks platforms={entry.devicePlatforms} />
+      <RatingBadge score={entry.rating} />
       <span className="flex-none font-mono text-[9.5px] text-[var(--dim2)]">{playtimeLabel(entry.playtimeMinutes)}</span>
     </div>
   );
@@ -7161,11 +7181,22 @@ function LibraryGameDetail({
         <div className="mt-2.5 flex flex-wrap gap-1.5">
           <span className="rounded-[8px] border border-[var(--accent-border)] bg-[var(--accent-soft)] px-[7px] py-[5px] font-mono text-[9.5px] leading-none text-[var(--accent)]">{groupName}</span>
           <span className="rounded-[8px] border border-[var(--border)] px-[7px] py-[5px] font-mono text-[9.5px] leading-none text-[var(--dim)]">{libOriginLabel(entry.origin)}</span>
+          <RatingBadge score={entry.rating} />
         </div>
         <dl className="mt-5 grid gap-2.5 rounded-[16px] border border-[var(--border)] bg-[var(--surface)] p-4 text-sm shadow-[var(--glass-hi)] backdrop-blur-md">
           <div className="flex justify-between gap-4">
             <dt className="shrink-0 text-[var(--dim)]">平台</dt>
             <dd className="text-right text-[var(--text)]">{groupName}</dd>
+          </div>
+          <div className="flex justify-between gap-4">
+            <dt className="shrink-0 text-[var(--dim)]">Steam 评分</dt>
+            <dd className="text-right text-[var(--text)]">
+              {entry.rating != null ? (
+                <><RatingBadge score={entry.rating} /> <span className="ml-1 font-mono text-[11px] text-[var(--dim2)]">/100</span></>
+              ) : (
+                <span className="text-[var(--dim)]">暂无 / 未收录</span>
+              )}
+            </dd>
           </div>
           {entry.devicePlatforms.length > 0 ? (
             <div className="flex justify-between gap-4">
@@ -7507,6 +7538,32 @@ function MinePage({
   const playtimeStatus = libraryQuery.data?.playtimeStatus ?? [];
   const primeLeft = primeQueueQuery.data?.items.length ?? 0;
   const openStatus = openPanel ? (data?.platforms ?? []).find((s) => s.platform === openPanel) ?? null : null;
+
+  // Resolve Steam Metacritic scores for every library game. The server caches
+  // each title globally, so this only does real Steam requests for new games;
+  // on success we refetch the library so the fresh scores show on covers and
+  // the "按评分" sort is immediately correct. A ref guards against refetch
+  // loops and against re-running for an unchanged library.
+  const ratingsSigRef = useRef<string | null>(null);
+  const resolveRatings = useMutation({
+    mutationFn: (games: { title: string; appid: string | null }[]) => api.libraryRatings({ games }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["library", session?.username ?? ""] }),
+  });
+  useEffect(() => {
+    if (!libraryQuery.data) return;
+    const games = groups.flatMap((g) =>
+      g.entries.map((e) => {
+        const m = e.storeUrl?.match(/\/app\/(\d+)/);
+        return { title: e.title, appid: g.platform === "steam" ? (m?.[1] ?? null) : null };
+      }),
+    );
+    if (games.length === 0) return;
+    const sig = games.map((x) => `${x.title}\u0000${x.appid ?? ""}`).join("\u0001");
+    if (ratingsSigRef.current === sig) return;
+    ratingsSigRef.current = sig;
+    resolveRatings.mutate(games);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [libraryQuery.data, groups]);
 
   const gateOrToggle = (platform: PlatformKey) => {
     if (!session) {
@@ -7935,6 +7992,7 @@ function MinePage({
           className="h-8 rounded-full border border-[var(--border)] bg-[var(--surface2)] px-3 text-[11px] font-medium text-[var(--dim)] backdrop-blur-md"
         >
           <option value="default">默认排序</option>
+          <option value="rating">按评分</option>
           <option value="playtime">按游戏时长</option>
           <option value="name">按名称</option>
           <option value="recent">按最近入库</option>
